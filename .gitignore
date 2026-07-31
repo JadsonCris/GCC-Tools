@@ -3,9 +3,10 @@ __pycache__/
 *.pyc
 
 # Ambiente
-.env
-venv/
-.venv/
+frontend/.env
+backend/.env
+node_modules/
+dist/
 
 # VS Code
 .vscode/
