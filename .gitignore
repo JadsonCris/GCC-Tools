@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+
+# Ambiente
+.env
+venv/
+.venv/
+
+# VS Code
+.vscode/
+
+# Banco
+*.db
+
+# Downloads
+backend/downloads/
+
+# Node
+node_modules/
+dist/
+build/
