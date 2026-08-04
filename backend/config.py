@@ -18,12 +18,15 @@ else:
 
 
 class Settings:
-    # --- URLs de export CSV do ServiceNow ---
-    PRINCIPAL_URL = os.getenv("PRINCIPAL_URL")
-    SLA3_URL = os.getenv("SLA3_URL")
-    SLA4_URL = os.getenv("SLA4_URL")
+    # --- URLs de export CSV do ServiceNow (instância nova: edpon.service-now.com) ---
+    PRINCIPAL_URL = os.getenv("PRINCIPAL_URL")  # "GCC Abertos" (incident_list.do)
+    SLA3_URL = os.getenv("SLA3_URL")  # "SLA 3" — todos os P1 (incident_list.do)
+    SLA4_URL = os.getenv("SLA4_URL")  # "SLA 4" — task_sla_list.do (ainda em estudo)
+    OK_URL = os.getenv("OK_URL")  # "TAG OK" (label_entry_list.do)
+    TAG_CALLS_GCC_URL = os.getenv("TAG_CALLS_GCC_URL")  # "TAG CALLS_GCC" (label_entry_list.do)
+
+    # --- Desativadas por agora: sem link novo da instância edpon ainda ---
     SLA3_GROUPS_URL = os.getenv("SLA3_GROUPS_URL")
-    OK_URL = os.getenv("OK_URL")
     USERS_URL = os.getenv("USERS_URL")
     AUDITKEYS_URL = os.getenv("AUDITKEYS_URL")
     DESPROMOVIDOS_URL = os.getenv("DESPROMOVIDOS_URL")
@@ -37,23 +40,25 @@ class Settings:
     SN_USER = os.getenv("SN_USER")
     SN_PASS = os.getenv("SN_PASS")
 
-    # --- Nomes dos ficheiros CSV baixados manualmente ---
+    # --- Nomes dos ficheiros baixados manualmente (.xls — export EXCEL) ---
     # Quando a busca automática falha, o backend procura estes nomes em
     # backend/downloads/. Preenche com o nome exato que o teu navegador
-    # usa ao baixar cada URL (ex: o ServiceNow às vezes nomeia o ficheiro
-    # como o ID do relatório ou com sufixo .do.csv).
-    # Se não preencheres, o backend procura por "{tabela}.csv" (que é o
-    # nome que usaste manualmente e que já funcionou).
-    SN_FILENAME_PRINCIPAL = os.getenv("SN_FILENAME_PRINCIPAL", "sys_report_template.csv")
-    SN_FILENAME_SLA3 = os.getenv("SN_FILENAME_SLA3", "sla3_incidentes.csv")
-    SN_FILENAME_SLA4 = os.getenv("SN_FILENAME_SLA4", "sla4.csv")
-    SN_FILENAME_SLA3_GRUPOS = os.getenv("SN_FILENAME_SLA3_GRUPOS", "sla3_grupos.csv")
-    SN_FILENAME_OK = os.getenv("SN_FILENAME_OK", "ok_.csv")
-    SN_FILENAME_USERS = os.getenv("SN_FILENAME_USERS", "users.csv")
-    SN_FILENAME_AUDITKEYS = os.getenv("SN_FILENAME_AUDITKEYS", "auditkeys.csv")
-    SN_FILENAME_DESPROMOVIDOS = os.getenv("SN_FILENAME_DESPROMOVIDOS", "despromovidos.csv")
-    SN_FILENAME_BACKLOG_INC = os.getenv("SN_FILENAME_BACKLOG_INC", "mon_backlog_incs.csv")
-    SN_FILENAME_BACKLOG_RITM = os.getenv("SN_FILENAME_BACKLOG_RITM", "mon_backlog_ritm.csv")
+    # usa ao baixar cada URL.
+    SN_FILENAME_PRINCIPAL = os.getenv("SN_FILENAME_PRINCIPAL", "PRINCIPAL_URL.xls")
+    SN_FILENAME_SLA3 = os.getenv("SN_FILENAME_SLA3", "SLA3_URL.xls")
+    SN_FILENAME_SLA4 = os.getenv("SN_FILENAME_SLA4", "SLA4_URL.xls")
+    SN_FILENAME_SLA3_GRUPOS = os.getenv("SN_FILENAME_SLA3_GRUPOS", "sla3_grupos.xls")
+    SN_FILENAME_OK = os.getenv("SN_FILENAME_OK", "OK_URL.xls")
+    SN_FILENAME_TAG_CALLS_GCC = os.getenv("SN_FILENAME_TAG_CALLS_GCC", "TAG_CALLS_GCC_URL.xls")
+    SN_FILENAME_USERS = os.getenv("SN_FILENAME_USERS", "users.xls")
+    SN_FILENAME_AUDITKEYS = os.getenv("SN_FILENAME_AUDITKEYS", "auditkeys.xls")
+    SN_FILENAME_DESPROMOVIDOS = os.getenv("SN_FILENAME_DESPROMOVIDOS", "despromovidos.xls")
+    SN_FILENAME_BACKLOG_INC = os.getenv("SN_FILENAME_BACKLOG_INC", "mon_backlog_incs.xls")
+    SN_FILENAME_BACKLOG_RITM = os.getenv("SN_FILENAME_BACKLOG_RITM", "mon_backlog_ritm.xls")
+    # JUSTIFICACOES_URL é do SharePoint (.xlsm), não do ServiceNow — não dá
+    # pra buscar automaticamente com as credenciais SN_USER/SN_PASS (ver
+    # cache.py, SERVICENOW_URLS). Só é lido manualmente de downloads/.
+    SN_FILENAME_JUSTIFICACOES = os.getenv("SN_FILENAME_JUSTIFICACOES", "JUSTIFICACOES_URL.xlsm")
 
     # --- Table REST API (reservado/futuro) ---
     _principal = os.getenv("PRINCIPAL_URL") or ""

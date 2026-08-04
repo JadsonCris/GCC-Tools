@@ -1,0 +1,929 @@
+ALTERAÇÕES FS — 2026-08-03
+==========================
+
+Resumo do trabalho feito hoje no GCC-Tools (dashboard). Duas frentes:
+1) Paleta de cores de marca (tecnologia, prioridade, OK/NOK/Justificado)
+2) Filtros de período e geografia (data exata + Global/Ibéria/Brasil)
+
+
+1. PALETA DE CORES DE MARCA
+----------------------------
+
+Objetivo: aplicar as cores oficiais fornecidas (tabela "Cores por
+Tecnologia" e "Paleta de Prioridades") em todo o dashboard, substituindo
+as cores placeholder usadas até agora.
+
+Backend:
+- backend/services/keywords.py
+  - TOOL_COLORS atualizado com as 17 cores primárias por tecnologia
+    (AWS, Azure, Collect, Control-M, CRM-ML, CyberArk, Dynatrace, EAI-SAP,
+    Elastic, ITSI, NTP, OEM, OEM_BKP, SCOM, SolarWinds, Solman, SysGrid).
+  - Novo dicionário TOOL_COLORS_AI com as cores "AI/secundária" da mesma
+    tabela, usado na página AIOPER.
+- backend/services/dashboard_service.py
+  - PRIORITY_COLORS atualizado: High(P2)=#FAB138, Moderate(P3)=#F9E33B,
+    Low(P4)=#30ADDE.
+  - get_tools_breakdown() passou a aceitar um parâmetro opcional
+    `palette` (para poder usar TOOL_COLORS ou TOOL_COLORS_AI conforme o
+    contexto, sem duplicar a lógica de contagem).
+  - get_aioper_summary() passa agora TOOL_COLORS_AI para o gráfico de
+    ferramentas da página AIOPER.
+
+Frontend:
+- frontend/src/components/Cards/SlaCard.jsx
+  - subMetrics passou a aceitar cores hex diretas (ex: "#0FA811"), além
+    das classes Tailwind antigas — deteta automaticamente se o valor
+    começa por "#" e aplica via style inline.
+- Cores OK / NOK / Justificado (#0FA811 / #E21B23 / #FAB138) aplicadas em:
+  - SlaOverviewSection.jsx (cards SLA3 e SLA4)
+  - SlaDetailSection.jsx (números grandes "SLA Cumprido/Falhado/
+    Justificado" + gráficos de tendência de SLA2 e SLA3)
+  - Quality.jsx (Conforme/Inconforme)
+- SlaDetailSection.jsx: gráfico de tendência de prioridade e de SLA4
+  também atualizados para a nova paleta (Critical/P1, High/P2, Moderate/
+  P3, Low/P4).
+- PriorityBarChartMui / ToolsPieChartMui já herdam a cor diretamente do
+  backend, não precisaram de alteração.
+
+ASSUNÇÕES (por falta de dado explícito na tabela fornecida):
+- Cor de Critical/P1: não veio na tabela de prioridades (só P2/P3/P4
+  tinham cor). Usei a mesma cor de "NOK" (#E21B23), por ser a prioridade
+  mais crítica — se quiseres outra cor, é só dizer.
+- "Solman BR" vs "Solman PT": a tabela distinguia as duas, mas o gráfico
+  agrupa por "Keyword Found", que não separa região (só o campo "Source"
+  tem essa distinção, e não é usado em nenhum gráfico atual). Usei a cor
+  de "Solman BR" para as duas. Separar a sério implicaria mudar o
+  agrupamento dos gráficos de "Keyword Found" para "Source".
+
+
+2. FILTROS DE PERÍODO E GEOGRAFIA
+-----------------------------------
+
+Objetivo: melhorar o filtro de datas (permitir escolher um dia/período
+exato, não só arrastar o slider) e repor o filtro de geografia que
+existia no dashboard antigo (Global / Ibéria / Brasil).
+
+a) Datas exatas
+- frontend/src/components/Filters/DateRangeFilter.jsx
+  - Adicionados dois campos "De" / "Até" (input de data nativo do
+    browser — dá para escrever a data ou escolher no calendário),
+    sincronizados nos dois sentidos com o slider já existente.
+  - Presets (Hoje / Semana / Mês / Trimestre / Ano / Tudo) mantidos.
+
+b) Filtro de geografia
+- frontend/src/context/DateRangeContext.jsx
+  - Novo estado partilhado `region` (default "Global"), ao lado do
+    período `range` já existente — partilhado entre Visão Geral, Report
+    SLAs e AIOPER (mudar numa página muda nas outras).
+- frontend/src/components/Filters/DateRangeFilter.jsx
+  - Novo seletor (toggle buttons) Global / Ibéria / Brasil, ao lado dos
+    campos de data.
+- backend/services/transform.py
+  - Nova função filter_by_region(df, region): filtra um DataFrame bruto
+    (antes do enrich) por geografia, usando a mesma regra já existente
+    em add_region_column (Brasil se "BRASIL" está no campo "Parent",
+    senão Ibéria). "Global" ou vazio não filtra nada.
+- backend/services/history_service.py
+  - get_monthly_summary, get_range_summary, get_current_summary e
+    get_sla_trend passaram a aceitar um parâmetro `region` opcional,
+    aplicado ao "GCC Abertos" e ao "SLA3 (Incidentes)" antes de qualquer
+    cálculo (KPIs, prioridade, ferramentas, SLA1-4 tudo já sai filtrado).
+  - SLA4 (task_sla_list.do) não tem geografia própria no export — quando
+    há filtro de região ativo, restringe-se às tasks cujo número de
+    incidente já pertence à região filtrada (cruzamento por número).
+    Sem filtro (Global), o comportamento fica exatamente igual ao que já
+    existia.
+- backend/routers/dashboard.py
+  - Novo query param `region` em /dashboard/monthly, /dashboard/range e
+    /dashboard/sla-trend.
+- frontend/src/service/dashboardApi.js
+  - getMonthlySummary, getRangeSummary e getSlaTrend passaram a aceitar
+    e enviar `region` ao backend.
+- Páginas atualizadas para passar a região selecionada nas queries:
+  SlaOverviewSection.jsx, SlaDetailSection.jsx, AIOper.jsx.
+
+ASSUNÇÃO:
+- "Ibéria" continua a ser um bloco único (PT + ES) porque o dado bruto
+  (campo "Parent") só distingue Brasil do resto — não há como separar PT
+  de ES nesse campo. Se a app antiga separava mesmo os dois em algum
+  sítio, preciso de saber qual era a fonte desse dado.
+
+
+3. LIMITAÇÕES DESTA SESSÃO
+----------------------------
+- Não havia Python nem Node.js disponíveis no ambiente desta sessão,
+  por isso não foi possível correr o backend (TestClient) nem o
+  frontend para validação visual/funcional — todas as alterações foram
+  revistas manualmente por leitura do código.
+- Recomendado correr localmente antes de dar como fechado, em especial:
+  - o cruzamento de SLA4 por região (join por número de incidente);
+  - o novo filtro de datas (campos "De"/"Até" sincronizados com o
+    slider);
+  - o seletor de geografia nas 3 páginas (Visão Geral, Report SLAs,
+    AIOPER).
+
+
+ALTERAÇÕES FS — 2026-08-04
+==========================
+
+Âmbito combinado com o utilizador: só o ecossistema /services/* (Visão
+Geral, Report SLAs, Central Operacional, AIOPER, Qualidade) — as páginas
+antigas em /reports/* (Home, DashboardReports, CAB, Critical Incidents,
+Report P1, Report9Manha, AdvancedSla) ficaram de fora, por serem um
+ecossistema paralelo nunca tocado nesta migração (algumas usam endpoints
+já desativados, ex: backlog/despromovidos).
+
+Lista de pedidos original:
+- Geral: botão Light/Dark Mode no header; filtros globais de Período e
+  Região em todas as páginas/cards/tabelas/gráficos.
+- Visão Geral: percentagem em cada slice do pie "Falha de SLA por
+  Ferramenta"; valores visíveis por cima das colunas em "Incidentes por
+  Prioridade".
+- Report de SLAs: cards SLA Cumprido/Falhado/Justificado clicáveis (abrir
+  tabela de incidentes); remover "(mês a mês)" dos títulos; SLA1 em
+  minutos; SLA4 com "≤ 3"; eliminar cards SLA3/SLA4 por Região e SLA1/SLA2
+  por Prioridade; valores visíveis nos gráficos.
+
+
+1. VIEW "REPORT DE SLAS"
+--------------------------
+
+- frontend/src/components/Sections/SlaDetailSection.jsx
+  - Os 3 números agregados (SLA Cumprido/Falhado/Justificado) passaram a
+    ser botões clicáveis — abrem um modal com a tabela de incidentes por
+    trás do número (novo componente IncidentsStatusModal.jsx).
+  - Títulos dos painéis de tendência perderam o "(mês a mês)" (o
+    subtítulo de cada um já deixava isso claro).
+  - Painel SLA1 passou a usar minutos (campo novo `sla1_avg_minutes`) em
+    vez de segundos; subtítulo simplificado para "Meta: < 15 min".
+  - Painel SLA4: subtítulo corrigido para usar o símbolo "≤ 3" em vez de
+    "<= 3".
+  - Removidos os blocos "SLA3/SLA4 por Região" e "SLA1/SLA2 por
+    Prioridade" — e os componentes que só serviam a eles
+    (SlaRegionBreakdown.jsx, SlaPriorityBreakdown.jsx) foram apagados por
+    ficarem sem nenhum uso.
+- backend/services/quality_service.py
+  - Nova função get_incidents_by_sla_status(df, status): devolve a lista
+    de incidentes por trás de "ok"/"nok"/"justificados" (mesma definição
+    já usada em get_quality_metrics — Coluna==0/1 com evento, e
+    "Justificado?"=="sim").
+- backend/services/history_service.py
+  - Nova get_incidents_by_status(start, end, status, region): aplica o
+    mesmo filtro de intervalo+geografia dos outros endpoints de range e
+    devolve as linhas em vez de um resumo.
+- backend/routers/dashboard.py
+  - Novo endpoint GET /dashboard/incidents-by-status?status=ok|nok|
+    justificados&start=...&end=...&region=...
+- frontend/src/service/dashboardApi.js
+  - Nova getIncidentsByStatus(status, start, end, region).
+- backend/services/history_service.py: get_sla_trend ganhou o campo
+  `sla1_avg_minutes` (arredondado a 1 casa decimal) em cada mês, usado
+  pelo gráfico de SLA1.
+
+
+2. VIEW "VISÃO GERAL"
+-----------------------
+
+- frontend/src/components/Charts/ToolsPieChartMui.jsx
+  - Pie "Falha de SLA por Ferramenta" passou a mostrar a percentagem
+    dentro de cada slice (`arcLabel`), estilo MUI X "Titanic Survival
+    Statistics" — só em slices com pelo menos 20° (`arcLabelMinAngle`),
+    pra não amontoar texto em fatias muito pequenas.
+- frontend/src/components/Charts/PriorityBarChartMui.jsx
+  - Barras de "Incidentes por Prioridade" passaram a mostrar o valor por
+    cima de cada coluna (`barLabel="value"`) — usado também na Central
+    Operacional, que reaproveita o mesmo componente.
+- frontend/src/components/Charts/TrendChart.jsx
+  - Gráficos de barra do Report SLAs (SLA2, SLA3, SLA4, Prioridade)
+    também passaram a mostrar o valor por cima da coluna.
+  - LIMITAÇÃO: os gráficos de linha (SLA1, Com Evento vs Sem Evento) NÃO
+    têm um equivalente oficial de "barLabel" no MUI X Charts Community
+    pra rótulos sempre visíveis em cada ponto — só ficou disponível via
+    tooltip ao passar o rato (já ativo por padrão). Fazer isso persistir
+    sem hover exigiria um componente customizado que não dava pra validar
+    sem conseguir correr a app nesta sessão — fica como próximo passo se
+    for mesmo necessário.
+
+
+3. FILTROS GLOBAIS (PERÍODO + REGIÃO) EM TODAS AS PÁGINAS
+-------------------------------------------------------------
+
+- frontend/src/pages/Quality.jsx
+  - Deixou de usar o endpoint "atual" (/analytics/quality, sem filtro) e
+    passou a usar getRangeSummary(start, end, region), como as outras
+    páginas — ganhou o <DateRangeFilter /> (Período + Região) no topo.
+- frontend/src/pages/CentralOperacional.jsx
+  - Mesma mudança: trocou 4 pedidos separados "atuais" (incidentes,
+    ferramentas, qualidade, operadores) por um único getRangeSummary
+    filtrado, e ganhou o <DateRangeFilter />.
+  - O modal de detalhe de operador (clicar numa linha da tabela) também
+    passou a respeitar o período/região selecionados.
+- backend/routers/operators.py + services/history_service.py
+  - GET /operators/{tecnico} e get_enriched_gcc_abertos/_range ganharam
+    parâmetro `region`, pro modal de detalhe do operador poder filtrar
+    por geografia também (antes só filtrava por mês/intervalo).
+- frontend/src/service/dashboardApi.js
+  - getOperatorDetail(tecnico, start, end, region) atualizado.
+- Sidebar (MainLayout.jsx): adicionado o link "Qualidade" que faltava (a
+  página existia e tinha rota, mas não tinha entrada no menu).
+
+
+4. LIGHT/DARK MODE
+---------------------
+
+- frontend/tailwind.config.js: `darkMode: "class"` (estratégia baseada em
+  classe "dark" na tag <html>, não na preferência do SO).
+- frontend/src/context/ThemeContext.jsx (novo): ColorModeProvider +
+  useColorMode() — estado partilhado por toda a app, persistido em
+  localStorage (chave "gcc-theme"), default "dark" pra não mudar o
+  visual de quem já usa a app.
+- frontend/src/main.jsx: novo MuiThemeBridge — o tema do MUI (usado pelos
+  gráficos MUI X, TextField, ToggleButtonGroup do filtro de datas) segue
+  o mesmo modo claro/escuro escolhido no botão, em vez de ficar preso a
+  "dark" sempre.
+- frontend/src/layouts/MainLayout.jsx: botão de alternância (ícone
+  sol/lua) no header; sidebar/header/main convertidos pra usar
+  `dark:`/claro conforme o tema.
+- Convertidos pra suportar os dois modos (classes `dark:` + cores MUI
+  relativas ao tema, em vez de hex fixos): DateRangeFilter.jsx,
+  SlaCard.jsx, KPICard.jsx, OperatorsTable.jsx, SemEventoTable.jsx,
+  IncidentsStatusModal.jsx (novo), GrupoSplitBar.jsx, PriorityChart.jsx,
+  ToolChart.jsx, TrendChart.jsx, PriorityBarChartMui.jsx,
+  ToolsPieChartMui.jsx, e as 5 páginas de /services (DashboardServices
+  via SlaOverviewSection, SLA via SlaDetailSection, CentralOperacional,
+  AIOper, Quality).
+- frontend/src/styles/globals.css: cor de fundo/texto do <body> também
+  ficou condicional ao tema (antes era sempre escuro fixo).
+
+ÂMBITO NÃO COBERTO (confirmado com o utilizador antes de começar):
+- Páginas de /reports/* (Home, DashboardReports, CAB, CriticalIncidents,
+  Reports1/ReportP1, ReportPt/Report9Manha) e AdvancedSla.jsx continuam
+  só em modo escuro — não fazem parte do ecossistema /services/* migrado
+  esta sessão.
+
+
+5. LIMITAÇÕES DESTA SESSÃO
+------------------------------
+- Mesma limitação de sempre: sem Python nem Node.js disponíveis neste
+  ambiente, não foi possível correr o backend nem o frontend — tudo
+  revisto manualmente por leitura do código, sem confirmação visual.
+- Recomendado testar em especial:
+  - o botão Light/Dark (alternar várias vezes, verificar contraste em
+    todos os cards/tabelas/gráficos das 5 páginas);
+  - os gráficos MUI X em modo claro (arcLabel do pie, barLabel das
+    barras, eixos/legendas);
+  - o novo modal de incidentes por status SLA (cards clicáveis no Report
+    SLAs);
+  - Quality.jsx e CentralOperacional.jsx com o filtro de período/região
+    aplicado (comportamento mudou de "sempre mês atual" pra "respeita o
+    filtro").
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação, mesmo dia)
+=========================================================
+
+Pedido: legenda (descrição de cada coluna/slice) por baixo do gráfico em
+vez de por cima, em todos os gráficos MUI X; correção de um erro visual
+apontado no modo escuro; suavizar a diferença de cor entre modo claro e
+escuro.
+
+1. LEGENDA POR BAIXO DOS GRÁFICOS
+------------------------------------
+- frontend/src/components/Charts/TrendChart.jsx: legenda movida para
+  baixo (`slotProps.legend.position = { vertical: "bottom", horizontal:
+  "middle" }`) — afeta os 6 painéis do Report SLAs.
+- frontend/src/components/Charts/ToolsPieChartMui.jsx: legenda movida de
+  lateral-direita pra baixo, na horizontal.
+- frontend/src/components/Charts/PriorityBarChartMui.jsx: NÃO ganhou
+  legenda — cada barra já mostra a sua descrição (Critical/High/
+  Moderate/Low) diretamente por baixo dela via o próprio eixo X, o que já
+  cobre o pedido sem duplicar informação.
+
+2. GLITCH NO EIXO ("000000") — SLA4 em modo escuro
+------------------------------------------------------
+- Causa: quando todos os valores do período são 0 (ex: SLA4 sem quebras),
+  o MUI X calcula uma escala de eixo degenerada (min=max=0) e chega a
+  desenhar vários ticks "0" sobrepostos — mais os rótulos de valor de
+  cada barra (`barLabel`), também "0", sobrepostos no mesmo ponto. Some
+  tudo isso no mesmo pixel e lê-se "000000".
+- Corrigido em TrendChart.jsx e PriorityBarChartMui.jsx:
+  - Eixo Y ganha um teto mínimo (`max: 1`) só quando TODOS os valores do
+    gráfico são zero — evita a escala degenerada sem alterar o
+    comportamento quando há dados reais.
+  - `barLabel` passou a devolver string vazia para valores 0 (não mostra
+    "0" repetido em cada barra vazia).
+
+3. PALETA CLARA MAIS SUAVE (menos contraste entre light/dark)
+-------------------------------------------------------------------
+- Fundo de página (MainLayout, body): de branco/quase-branco pra
+  slate-100 (#f1f5f9) — mais próximo em "peso visual" do fundo escuro
+  (slate-950) do que um branco puro.
+- Texto principal: de slate-900 (quase preto) pra slate-800 — menos
+  contraste extremo, mais parecido com o branco suave (slate-100) usado
+  no texto do modo escuro.
+- Cards/painéis mantidos em branco puro (elevados sobre o fundo
+  slate-100), senão perdiam toda a hierarquia visual contra a página.
+- Aplicado de forma consistente com `sed` em todos os ficheiros já
+  convertidos pro tema (mesmas classes `bg-white dark:bg-slate-900`,
+  `text-slate-900 dark:text-white`, `bg-slate-50 dark:bg-slate-950`,
+  `border-slate-200 dark:border-slate-800`, reescritas em massa).
+
+4. REVISÃO DO CÓDIGO DE LIGHT/DARK MODE
+-------------------------------------------
+Revi o ColorModeProvider (context/ThemeContext.jsx), a ponte com o tema
+MUI (main.jsx) e o botão no header (MainLayout.jsx) — estruturalmente
+não encontrei nenhum bug (o toggle troca a classe "dark" na tag <html>,
+Tailwind está configurado com `darkMode: "class"`, e todas as classes
+`dark:` usadas são strings estáticas, então o Tailwind consegue
+detetá-las na build). Não consegui reproduzir visualmente o erro
+específico do modo escuro sem conseguir correr a app — ver nota abaixo.
+
+ATUALIZAÇÃO (mesmo dia, depois de ver a imagem "img 3 - tudo mal"):
+o bug real era na página "/" (Home.jsx) — fica FORA do MainLayout (sem
+sidebar, sem tema, renderizada direto pela rota "/") e nunca tinha
+background próprio: dependia do <body> estar sempre escuro por padrão.
+Isso deixou de ser verdade quando o <body> passou a seguir o tema (ver
+globals.css) — resultado: fundo da página claro, mas o texto ("Claranet
+GCC Service Dashboard") continuava com a classe fixa `text-white`,
+ilegível, com os cards ainda escuros por baixo. Corrigido dando à
+Home.jsx o seu próprio fundo escuro fixo (`min-h-screen bg-slate-950
+text-slate-100`), independente do tema — consistente com a decisão de
+âmbito já tomada (só /services/* participa do light/dark mode; Home.jsx
+e /reports/* continuam sempre escuros). As páginas /reports/* não
+tinham este problema porque o ReportsLayout.jsx já tinha o seu próprio
+fundo fixo (`bg-slate-950 text-white`) no contentor raiz.
+
+ATUALIZAÇÃO 2 (mesmo dia): depois de reiniciar o `npm run dev`, o toggle
+Light/Dark passou a funcionar (era mesmo o servidor preso na estratégia
+antiga do Tailwind, `media`, em vez de `class` — não era bug de código).
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 2, mesmo dia)
+============================================================
+
+Dois problemas reportados já com o dev server reiniciado e o tema a
+funcionar:
+1) Espaçamento entre o gráfico e a legenda (em baixo) muito apertado,
+   quase a tocar nos rótulos do eixo X.
+2) Os valores por cima das colunas (barLabel) tinham desaparecido de
+   TODOS os gráficos de barra — regressão introduzida na correção
+   anterior do glitch "000000".
+
+Causa da regressão: pra esconder rótulos "0" repetidos (o que causava o
+"000000"), troquei `barLabel: "value"` (string, modo documentado/
+estável do MUI X) por uma função `(item) => item.value ? ... : ""`. Essa
+função quebrou a renderização de TODOS os rótulos, não só os zero —
+mesmo barras com 1962, 2500 incidentes deixaram de mostrar o número.
+
+Corrigido em TrendChart.jsx e PriorityBarChartMui.jsx:
+- `barLabel` voltou a "value" (string) em vez da função — o glitch do
+  "000000" já fica resolvido só com o teto mínimo do eixo Y
+  (`yAxisExtra`/`max: 1` quando tudo é zero), que continua ativo; não
+  precisava da função pra isso.
+- TrendChart.jsx: `height` aumentado de 260 para 300, `margin={{ bottom:
+  56 }}` e `slotProps.legend.padding = { top: 16 }` adicionados, pra dar
+  respiro entre o eixo X e a legenda por baixo.
+
+LIMITAÇÃO: não consegui ver o resultado renderizado (sem Node.js nesta
+sessão) — o ajuste de espaçamento é uma estimativa razoável, pode
+precisar de mais um ajuste fino depois de veres como ficou.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 3, mesmo dia)
+============================================================
+
+CAUSA REAL encontrada (com Node.js já disponível nesta sessão, dá pra
+inspecionar os tipos do @mui/x-charts instalado em vez de adivinhar):
+
+`barLabel` é uma prop do PRÓPRIO `<BarChart>` (nível do gráfico, aplica-
+-se a todas as barras de uma vez) — NÃO um campo de cada item dentro de
+`series[]`. Estava a defini-lo dentro de cada série
+(`series={[{ dataKey, barLabel: "value" }]}`), onde é só uma propriedade
+extra ignorada — por isso nunca aparecia nada, e só o tooltip do rato
+(mecanismo completamente à parte) continuava a mostrar o valor.
+
+Corrigido:
+- frontend/src/components/Charts/TrendChart.jsx: `barLabel="value"`
+  movido pra fora do `.map()` das séries, pra prop direta do `<Chart>`
+  (só quando `type === "bar"`).
+- frontend/src/components/Charts/PriorityBarChartMui.jsx: mesma
+  correção — `barLabel="value"` como prop do `<BarChart>`.
+- Confirmado com `grep` nos `.d.ts` do pacote instalado
+  (node_modules/@mui/x-charts) que `arcLabel`/`arcLabelMinAngle` do
+  ToolsPieChartMui.jsx ESTAVAM certos desde o início (esses sim são
+  campos válidos de cada série de pie chart) — por isso as percentagens
+  nas fatias já funcionavam.
+- ToolsPieChartMui.jsx: legenda voltou pro lado direito (revertida a
+  mudança pra baixo de uma iteração anterior).
+
+Desta vez consegui validar com `npx eslint` nos ficheiros tocados (0
+erros) e correr `npm run build` — Node.js passou a estar disponível
+nesta sessão a meio do dia, ao contrário do resto do dia.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 4, mesmo dia)
+============================================================
+
+Pedido: o valor por cima da barra (já a funcionar, centrado dentro
+dela) devia ficar no TOPO da barra, não no meio — como no exemplo do
+dashboard antigo (Power BI).
+
+Investigação (com Node.js disponível, fui direto ao código-fonte
+instalado em vez de adivinhar): o `barLabel` embutido do MUI X Charts
+não tem NENHUMA opção de posição — confirmado em
+BarChart/BarLabel/BarLabelPlot.js que a coordenada é sempre calculada
+como o centro exato da barra (`x + width/2, y + height/2`), sem prop
+pública pra mudar isso. Perguntei ao utilizador se queria mesmo assim
+avançar sabendo que não consigo testar visualmente o alinhamento —
+respondeu que sim.
+
+Solução: nova função de rótulos, independente do `barLabel` embutido.
+- frontend/src/components/Charts/BarValueLabels.jsx (novo): recebe os
+  mesmos `data`/`series` já passados ao gráfico e desenha o próprio
+  `<text>` SVG por cima de cada barra, usando os hooks públicos
+  `useXScale`/`useYScale` (@mui/x-charts/hooks) pra saber a posição em
+  pixel de cada categoria/valor.
+  - Pra gráficos com várias séries lado a lado (SLA2 OK/NOK, Prioridade
+    com 4 cores), reproduz a MESMA fórmula que o MUI X usa por dentro
+    pra dividir o espaço entre barras do mesmo grupo (função
+    `getBandSize` em BarChart/BarPlot.js, com o `barGapRatio` default
+    de 0.1 — confirmado em internals/computeAxisValue.js), pra alinhar
+    com precisão em vez de aproximar.
+  - Esconde o rótulo quando o valor é 0 (evita o mesmo tipo de ruído
+    visual do glitch "000000" de antes).
+- TrendChart.jsx / PriorityBarChartMui.jsx: `barLabel="value"` removido
+  (era o embutido, sempre centrado); passam agora `<BarValueLabels>`
+  como `children` do `<BarChart>`.
+- Eixo Y ganhou 15% de folga acima do valor máximo (`max: maxValue *
+  1.15`) — sem isso a barra mais alta encostava no topo do gráfico e o
+  rótulo, agora desenhado por cima da barra em vez de dentro, ficava
+  cortado.
+
+Validação: `npx eslint` (0 erros) e `npm run build` (sucesso, 3340
+módulos, sem warnings novos) nos ficheiros tocados. Isto confirma que o
+código compila e os imports resolvem — NÃO confirma visualmente que o
+alinhamento pixel-a-pixel está perfeito (não há como abrir um browser
+nesta sessão). A fórmula de posicionamento foi copiada diretamente do
+código-fonte da biblioteca instalada (não adivinhada), por isso a
+confiança é alta, mas vale a pena confirmar visualmente antes de dar
+como fechado — principalmente nos gráficos com 4 séries (Incidentes por
+Prioridade).
+
+CONFIRMADO PELO UTILIZADOR: funcionou — screenshot mostra os valores
+corretamente alinhados por cima de cada barra em todos os 5 gráficos de
+barra, incluindo o de 4 séries (Incidentes por Prioridade). A fórmula
+copiada do código-fonte estava certa.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 5, mesmo dia)
+============================================================
+
+Pedido: mesma coisa (valor sempre visível, por cima do ponto) agora nos
+gráficos de LINHA (SLA1, Com Evento vs Sem Evento) — até agora só
+tinham tooltip ao passar o rato.
+
+- frontend/src/components/Charts/LineValueLabels.jsx (novo): mesma
+  ideia do BarValueLabels.jsx, mas mais simples — o eixo X de uma
+  LineChart usa escala "point" (não "band"), que já devolve a posição
+  exata de cada ponto diretamente, sem precisar repartir espaço entre
+  séries vizinhas (isso só existe em barras agrupadas). Cor do texto
+  segue a cor da própria linha (`s.color`), não uma cor neutra — fica
+  mais fácil de ligar cada número à série certa quando há 2 linhas no
+  mesmo gráfico (Com Evento vs Sem Evento).
+- TrendChart.jsx: passa `<LineValueLabels>` como `children` quando
+  `type !== "bar"` (mesma folga de eixo Y de 15% já aplicada a ambos os
+  tipos, então já não precisou de ajuste extra).
+
+Validação: `npx eslint` (0 erros) e `npm run build` (sucesso) — mesma
+ressalva de sempre, não há como confirmar visualmente o alinhamento
+sem browser, mas a lógica é mais simples que a das barras (sem fórmula
+de agrupamento a replicar), por isso o risco é menor.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 6, mesmo dia) — JUSTIFICAÇÕES
+================================================================================
+
+NOTA IMPORTANTE: pela primeira vez nesta sessão, Python + pandas +
+openpyxl + o venv do projeto (com todas as dependências do
+requirements.txt) ficaram disponíveis. Isto mudou a forma de trabalhar
+nesta parte: em vez de só ler código e documentar assunções, consegui
+correr o backend a sério — abrir o ficheiro real de Justificações com
+pandas, gravar na BD real (dashboard.db, a mesma que a app usa, só a
+tabela nova "justificacoes" foi tocada) e validar cada função com
+`TestClient` contra dados reais e históricos (4 meses, milhares de
+incidentes). Isto dá muito mais confiança do que as sessões anteriores,
+onde só dava pra rever o código.
+
+Pedido: os incidentes identificados na tabela de Justificações (SharePoint,
+JUSTIFICACOES_URL) devem deixar de contar como quebra de SLA e passar a
+"justificados" — mostrados no card Justificado do Report SLAs com a sua
+justificação. Além disso: SLA1 com 2 linhas (com/sem justificações),
+SLA2 com barra extra de justificados + linha de referência a 10% do
+total, SLA3 igual mas a 30%.
+
+
+1. LIGAÇÃO À TABELA DE JUSTIFICAÇÕES (SharePoint)
+------------------------------------------------------
+
+Descoberta ao investigar: o parâmetro `justificacoes` de
+`enrich_sys_report_template()` já existia no código (criado nalguma
+sessão anterior) mas NUNCA era passado por nenhum sítio que o chamava —
+"Justificado?" ficava sempre "não" pra todo o mundo, e a tabela em si
+nunca era sequer descarregada/gravada na BD. Corrigido de ponta a ponta:
+
+- backend/config.py: nova `SN_FILENAME_JUSTIFICACOES` (default
+  "JUSTIFICACOES_URL.xlsm").
+- backend/cache.py:
+  - JUSTIFICACOES_URL é SharePoint, não ServiceNow — as credenciais
+    SN_USER/SN_PASS não servem pra autenticar lá. Por isso a tabela
+    "justificacoes" tem URL de busca automática sempre `None`
+    (SERVICENOW_URLS) — vai direto pro download manual em downloads/,
+    igual ao que já acontecia com as tabelas desativadas.
+  - `_read_csv_file()` ganhou suporte a `.xlsm` (mesmo motor que
+    `.xlsx`, openpyxl) e um parâmetro `sheet_name` — o ficheiro real
+    (confirmado abrindo backend/downloads/JUSTIFICACOES_URL.xlsm) tem 5
+    sheets ('ACN (Brasil)', 'Minsait (Brasil)', 'SLA Mês Passado', 'SLA
+    Mês Atual', 'Justificações') — só a última interessa, e sem
+    `sheet_name` o pandas lia sempre a primeira (errada).
+  - Nova `_save_justificacoes_table()`: grava por SUBSTITUIÇÃO total
+    (`to_sql(if_exists="replace")`), não incremental como as outras 5
+    tabelas — esta planilha não "purga" com o tempo como o ServiceNow
+    (é mantida manualmente), então não existe conceito de "backlog"
+    aqui. Também não dava pra fazer UPSERT mesmo que quiséssemos: a
+    chave natural (Incidente + Aceite?) tem 19 duplicados genuínos nos
+    dados reais.
+  - Testado com o ficheiro real: 4313 linhas lidas e gravadas
+    corretamente na dashboard.db (só a tabela nova, as outras 11
+    tabelas existentes não foram tocadas).
+
+Schema real confirmado (Incidente | texto | Aceite?):
+  - "Incidente": tem tabs/espaços/nbsp à volta em várias linhas
+    (limpo com `.str.strip()`).
+  - "texto": a justificação em si, texto livre.
+  - "Aceite?": qual(is) SLA(s) aquela linha justifica — valores reais
+    encontrados: "SLA1", "SLA2", "SLA3", "SLA4", "SLA1, SLA2" (várias)
+    e "Despromoção" (mapeado pra SLA4 — mesmo conceito de "P1
+    despromovido" que o SLA4 desta app já usa). Linhas com "Aceite?"
+    vazio (ainda não avaliadas pela equipa) NÃO contam como
+    justificadas.
+  - Um mesmo incidente pode ter várias linhas — uma por SLA/motivo
+    diferente (ex: INC3311534 tem uma linha "SLA3" e outra
+    "Despromoção", com textos diferentes).
+
+- backend/services/justificacoes_service.py (novo): `parse_justificacoes()`
+  normaliza a tabela bruta e extrai quais SLAs (1-4) cada linha cobre;
+  `get_justified_map(df_parsed, sla)` devolve {Incidente: texto} só pra
+  quem justifica aquele SLA específico. Testado contra os dados reais:
+  3171 incidentes justificados pra SLA1, 3109 pra SLA2, 122 pra SLA3,
+  600 pra SLA4 (via "Despromoção").
+
+
+2. "NÃO CONTAR O SLA REFERIDO" — OK/NOK/JUSTIFICADO MUTUAMENTE EXCLUSIVOS
+------------------------------------------------------------------------------
+
+- backend/services/transform.py: `enrich_sys_report_template()` agora
+  recebe a tabela bruta de justificações e gera colunas SEPARADAS por
+  SLA: "Justificado SLA1", "Justificado SLA2" (+ "Justificado?" mantido
+  como OU dos dois, por compatibilidade) e "Justificacao Texto".
+- backend/services/quality_service.py: `get_quality_metrics()`
+  reescrito — antes "justificados" era uma contagem à parte que podia
+  sobrepor OK ou NOK (mas como o parâmetro nunca chegava preenchido,
+  dava sempre 0 na prática). Agora um incidente que seria NOK
+  (Coluna==1) mas tem justificação aceite pra SLA2 sai de "nok_count" e
+  entra em "justificados" — "não conta o SLA referido na tabela", como
+  pedido. OK fica OK independente de ter linha na tabela (não havia
+  problema nenhum a desculpar). Isto alimenta ao mesmo tempo os 3 cards
+  do topo do Report SLAs (Cumprido/Falhado/Justificado) E as barras do
+  gráfico de tendência do SLA2 (mesma fonte de dados).
+  - `get_incidents_by_sla_status()`: mesma lógica mutuamente exclusiva
+    — o card "Justificado" agora mostra exatamente os incidentes que
+    saíram do NOK por causa da justificação, com a coluna
+    "Justificacao Texto" incluída na resposta (campo `justificacao` no
+    JSON, novo).
+- backend/services/sla_service.py: `get_sla3_summary()` ganhou o mesmo
+  tratamento — P1s "not_achieved" com justificação aceite pra SLA3 saem
+  de "not_achieved" e entram em "justificados". `sla3_pct` continua a
+  ser o número BRUTO (achieved/total), sem ajuste — mesmo critério do
+  SLA2 (justificação não infla a percentagem, só reclassifica a barra).
+
+Testado contra dados reais (4 meses): SLA2 justificados por mês = 7,
+49, 4, 0 — números pequenos e plausíveis frente aos totais (600-2600
+incidentes/mês). SLA1 "com justificações" sempre menor que "sem" (ex:
+junho: 19.3min sem vs 8.9min com) — confirma que remover os incidentes
+justificados (eventos com "first occurrence" claramente errada) limpa a
+média, como esperado.
+
+
+3. SLA1 COM 2 LINHAS
+------------------------
+
+- backend/services/dashboard_service.py: `get_sla1_sla2()` ganhou
+  "avg_seconds_justificado"/"avg_time_justificado" — a mesma média de
+  SLA1, mas excluindo incidentes com justificação aceite pra SLA1. A
+  ideia (confirmada com os dados reais): um evento com "first
+  occurrence" atrasada/errada não deve inflacionar a média real de
+  escalonamento — removê-lo dá o número "limpo".
+- Frontend (SlaDetailSection.jsx): painel SLA1 agora com 2 séries —
+  "Sem Justificações" (vermelho, bruto) e "Com Justificações" (verde,
+  sem os justificados) — mesmo estilo do dashboard antigo mostrado na
+  imagem de referência.
+
+
+4. SLA2/SLA3 COM BARRA DE JUSTIFICADOS + LINHA DE THRESHOLD
+------------------------------------------------------------------
+
+- backend: `get_sla_trend()` ganhou `sla2_justificados`+
+  `sla2_threshold_count` (10% do total de incidentes com evento do mês)
+  e `sla3_justificados`+`sla3_threshold_count` (30% do total de P1s do
+  mês) — ambos calculados mês a mês, variam com o total de cada mês
+  (não é uma linha fixa).
+- frontend/src/components/Charts/ThresholdTrendLine.jsx (novo): como o
+  threshold muda mês a mês, não é uma linha horizontal fixa — desenha
+  um polyline ligando o valor de threshold de cada mês, com os mesmos
+  hooks públicos (useXScale/useYScale) já usados em BarValueLabels.jsx/
+  LineValueLabels.jsx. Não existe "linha de referência" nativa no MUI X
+  Charts pra isto.
+- TrendChart.jsx: novo prop opcional `thresholdKey` — quando presente
+  (só nos gráficos de barra), desenha a ThresholdTrendLine por cima; o
+  cálculo de folga do eixo Y (15%) passou a incluir o valor do
+  threshold, pra a linha nunca ficar cortada no topo.
+- SlaDetailSection.jsx: painéis SLA2 e SLA3 ganharam a 3ª série
+  "Justificados" (laranja) e `thresholdKey` (10%/30% respetivamente).
+
+
+5. VALIDAÇÃO END-TO-END COM DADOS REAIS
+--------------------------------------------
+
+Com Python disponível pela primeira vez nesta sessão, testei a cadeia
+INTEIRA (não só sintaxe): `history_service.get_sla_trend()` e
+`get_range_summary()` direto contra a dashboard.db real, e depois os
+endpoints HTTP reais via `TestClient` (`/api/dashboard/sla-trend`,
+`/api/dashboard/incidents-by-status`, `/api/dashboard/range`) — todos
+200 OK, números coerentes entre si (ex: sla2_justificados do trend bate
+com o total de incidentes devolvidos por /incidents-by-status pro mesmo
+mês). Corri também um smoke test nos endpoints que NÃO deviam ter
+mudado (monthly, bounds, months, operators, quality, sem-evento) — tudo
+continua 200 OK, sem regressão.
+
+Frontend: `npx eslint` (0 erros) e `npm run build` (sucesso) nos
+ficheiros novos/tocados — mas isto só confirma que compila, não
+substitui ver renderizado num browser real (sem Node com display
+gráfico nesta sessão). Vale a pena confirmar visualmente, principalmente:
+- a linha de threshold tracejada (ThresholdTrendLine) — é um componente
+  novo, nunca visto renderizado;
+- os textos de justificação no modal (podem ser longos — truncados com
+  `max-w-sm` + `title` no hover pro texto completo).
+
+ASSUNÇÕES:
+- "Justificado" (card + SLA2) só considera "Aceite?" com SLA1 ou SLA2 —
+  é o que já fazia sentido com a definição existente de "Coluna"
+  (OK/NOK, que É a métrica de SLA1/SLA2). SLA3 tem a sua própria lógica
+  de justificação, separada (não passa pelo card do topo).
+- Linhas com "Aceite?" vazio (não avaliadas) NÃO contam como
+  justificadas — só "Aceite?" preenchido é tratado como aprovado. Se a
+  equipa quiser distinguir "pendente" de "rejeitado", a coluna bruta
+  "Aceite?" já está gravada na BD, dá pra refinar depois.
+- SLA4 ("Despromoção", 600 incidentes na tabela) NÃO foi alterado nesta
+  ronda — só SLA1/2/3 foram pedidos explicitamente. A infraestrutura
+  (get_justified_map(parsed, 4)) já existe pronta pra quando for pedido.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 7, mesmo dia) — CENTRAL OPERACIONAL
+================================================================================
+
+Pedido: duas tabelas novas na Central Operacional — (1) quantidade de
+incidentes abertos por Source, dia a dia (réplica de uma tabela do
+dashboard antigo); (2) incidentes abertos + tags "OK" feitas por cada
+membro da equipa, com um mapa Utilizador->Nome passado pelo utilizador
+(a tabela "ok_"/TAG OK usa o username curto do ServiceNow, ex:
+"EX132427", não o nome completo usado no resto da app).
+
+1. TABELA "INCIDENTES POR FONTE E DIA"
+-------------------------------------------
+- backend/services/dashboard_service.py: nova `get_source_by_day(df)` —
+  pivot Source (linha) x dia de abertura (coluna) -> contagem. Usa
+  "Source" (não "Keyword Found"): é a coluna que já distingue região pra
+  OEM/SOLMAN ("OEM BR" vs "OEM PT"), que é o que a imagem de referência
+  mostrava. Incidentes sem Source (Grupo=="Monitorização") ficam de
+  fora.
+- frontend/src/components/Tables/SourceByDayTable.jsx (novo): tabela
+  com scroll horizontal, coluna "Source" fixa (sticky) e cabeçalho de 2
+  linhas (mês a agrupar os dias + dia do mês), réplica visual da imagem
+  de referência. Linha e coluna de Total.
+- Testado com dados reais: junho/2026 tem 30 dias x 14 sources, total
+  2028 (bate com o total de incidentes com evento do mês, já validado
+  na sessão de Justificações).
+
+2. TABELA "ATIVIDADE DA EQUIPA" (Incidentes Abertos + Tags OK)
+--------------------------------------------------------------------
+- backend/services/team_service.py (novo):
+  - `USUARIOS`: mapa Utilizador (username curto, ex: "EX132427") ->
+    Nome completo, passado diretamente pelo utilizador (18 entradas,
+    não vem de nenhum export automatizado).
+  - `username_to_tecnico()`: "EX132427" -> "André Fernandes Claranet"
+    — o mesmo formato usado em "Opened by"/"Técnico" no resto da app.
+    Confirmado nos dados reais: os 18 usernames da tabela "ok_" (TAG
+    OK) batem exatamente com os 18 usernames que o utilizador passou.
+  - `get_team_activity()`: por técnico, nº de incidentes abertos
+    (coluna "Técnico" do principal já filtrado) + nº de tags "OK_GCC"
+    feitas (tabela "ok_", coluna "Created by" traduzida via
+    `username_to_tecnico`).
+  - `filter_ok_by_incident_set()`: a tabela "ok_" não tem região/
+    técnicos-ocultos própria — pra respeitar o filtro de
+    período+região+técnicos ocultos já aplicado ao principal, restringe
+    "ok_" aos incidentes cujo número (extraído de "Title", ex:
+    "Incident - INC0030238") já sobreviveu a esse filtro.
+- backend/services/history_service.py: `get_monthly_summary`/
+  `get_range_summary` passaram a ler+filtrar a tabela "ok_" (coluna
+  "Created", mesmo período) e chamar `_compute_team_activity()`.
+- frontend/src/components/Tables/TeamActivityTable.jsx (novo): tabela
+  simples Técnico | Incidentes Abertos | Tags OK (verde).
+- Testado com dados reais: junho/2026, 17 técnicos, ex: "Diogo Mendes
+  Claranet" — 245 incidentes abertos, 325 tags OK (plausível: tags OK
+  não são só auto-atribuídas, um técnico pode validar incidentes
+  abertos por outros).
+
+3. LIGAÇÃO NA CENTRAL OPERACIONAL
+--------------------------------------
+- frontend/src/pages/CentralOperacional.jsx: as duas tabelas novas
+  ligadas ao mesmo `summary` (getRangeSummary) já usado pelo resto da
+  página — não precisou de nenhum pedido extra ao backend, só consumir
+  os dois campos novos (`source_by_day`, `team_activity`) que já vêm no
+  payload existente.
+
+VALIDAÇÃO: testado end-to-end com `TestClient` contra a dashboard.db
+real (`/api/dashboard/range`, payload de junho/2026 com as duas tabelas
+= 16.4KB, tamanho razoável). Smoke test nos endpoints que não deviam
+mudar — tudo 200 OK. Frontend: `npx eslint` (0 erros) e `npm run build`
+(sucesso).
+
+ASSUNÇÕES:
+- Usernames da tabela "ok_" sem entrada em `USUARIOS` são devolvidos
+  tal como vieram (ex: "EX999999"), em vez de desaparecer da tabela —
+  pra não perder o dado se a equipa mudar/crescer sem eu saber.
+- "Tags OK" conta só `Label == "OK_GCC"` (único valor visto nos dados
+  reais — 5273 de 5273 linhas).
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 8, mesmo dia)
+============================================================
+
+Pedido: remover o bloco "Escala de Operadores" da Central Operacional
+(ficou redundante com a nova tabela "Atividade da Equipa"); eliminar a
+view "Qualidade" por completo.
+
+1. "ESCALA DE OPERADORES" REMOVIDA DA CENTRAL OPERACIONAL
+----------------------------------------------------------------
+- frontend/src/pages/CentralOperacional.jsx: removido o bloco inteiro
+  (tabela + modal de detalhe do operador ao clicar numa linha) — junto
+  os imports que só serviam pra isso (`useState`, `getOperatorDetail`,
+  `OperatorsTable`, `PriorityChart`, `ToolChart`, `X` do lucide-react) e
+  as variáveis derivadas (`agents`, `loadingAgents`, `isAgentsError`,
+  `selectedOperator`).
+- NÃO apaguei o endpoint `/operators/{tecnico}` nem `getOperatorDetail()`
+  no backend/dashboardApi.js — só a UI que os usava desapareceu; a
+  funcionalidade em si continua a funcionar caso seja pedida de volta
+  nalgum sítio.
+- `OperatorsTable.jsx` (o componente) NÃO foi apagado — continua a ser
+  usado na Visão Geral ("Técnicos — Incidentes e Não Conformidades").
+
+2. VIEW "QUALIDADE" ELIMINADA
+-----------------------------------
+- frontend/src/pages/Quality.jsx: ficheiro apagado.
+- frontend/src/App.jsx: rota "/services/quality" removida.
+- frontend/src/layouts/MainLayout.jsx: link "Qualidade" removido da
+  sidebar (tinha sido adicionado numa sessão anterior por estar em falta
+  no menu, apesar da rota já existir).
+- `getQualityMetrics()` (dashboardApi.js) e o endpoint `/analytics/
+  quality` (backend) ficaram sem nenhum consumidor no frontend, mas não
+  foram apagados — o endpoint continua funcional caso seja preciso de
+  novo.
+
+Validação: `npx eslint` (0 erros) e `npm run build` (sucesso) — bónus:
+o bundle ficou ~270KB mais leve (806KB vs 1074KB antes), porque a
+Quality.jsx era o único consumidor de `recharts` no ecossistema
+/services/* (as outras páginas já usam só MUI X Charts).
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 9, mesmo dia) — GESTÃO DE TURNOS
+================================================================================
+
+Pedido: portar a ferramenta HTML standalone "Gestão de Turnos MOD"
+(localStorage, ficheiro enviado) pra dentro da app, como uma view nova
+("Gestão de Turnos"), importando os dados que já lá estavam (JSON
+enviado) e passando a gravar as alterações na dashboard.db em vez de
+localStorage.
+
+Decisões confirmadas com o utilizador antes de começar (dado o tamanho
+da tarefa):
+1. Gravação: botão "Guardar" explícito — pinta em memória, só grava no
+   backend quando se clica em Guardar (não é grava-a-cada-clique, ao
+   contrário da ferramenta original).
+2. Âmbito: os 4 separadores da ferramenta original de uma vez (Escala,
+   Estatísticas Mensais, Estatísticas Anuais, Métricas Individuais).
+
+Esta é a PRIMEIRA parte da app com endpoints de ESCRITA — até agora
+tudo era só leitura de dados vindos do ServiceNow.
+
+1. MODELO DE DADOS + IMPORTAÇÃO DOS DADOS EXISTENTES
+----------------------------------------------------------
+- backend/data/turnos_seed.json (novo): o JSON enviado, guardado no
+  repositório — é a "BD antiga" da ferramenta HTML, preservada como
+  dados iniciais.
+- backend/services/turnos_service.py (novo):
+  - Schema: `turnos_employees(id, name, pos, hidden, sort_order)` +
+    `turnos_shifts(employee_id, date, shift)` — diferente do padrão
+    UPSERT do resto do cache.py (essa lógica existe pra lidar com o
+    ServiceNow a purgar dados antigos; aqui não há purga nenhuma, é a
+    própria app que escreve).
+  - `seed_if_empty()`: importa o turnos_seed.json (convertendo o
+    formato antigo "monthly: {'YYYY-M com mês 0-indexado': {dia:
+    turno}}" pra datas reais "YYYY-MM-DD") SÓ se "turnos_employees"
+    estiver vazia — chamado uma vez no arranque da app (main.py), pra
+    nunca sobrescrever trabalho real feito na app nova.
+  - CRUD de colaboradores + leitura do ano inteiro de turnos + escrita
+    por mês (substitui tudo o mês desse colaborador de uma vez, igual
+    à semântica do botão "Guardar").
+- backend/routers/turnos.py (novo): GET/POST/PATCH/DELETE
+  /api/turnos/employees, GET /api/turnos/shifts?year=, PUT
+  /api/turnos/employees/{id}/shifts, POST /api/turnos/clear-month.
+- backend/main.py: `seed_if_empty()` chamado no evento de arranque, a
+  seguir aos routers novos incluídos.
+
+Testado com dados reais: importação deu 10 colaboradores e 1057 dias
+com turno atribuído em 2026 (bate com o JSON de origem). Ciclo completo
+testado via TestClient: criar colaborador → gravar turnos de um mês →
+ler de volta → apagar colaborador → confirmar que os turnos desapareceram
+também (ON DELETE CASCADE). Testado também que a app arranca
+normalmente com `seed_if_empty()` a correr todas as vezes (idempotente
+— não faz nada se já houver colaboradores).
+
+2. FRONTEND — CÁLCULOS PORTADOS
+-------------------------------------
+- frontend/src/utils/turnosCalc.js (novo): mesma lógica de cálculo da
+  ferramenta original (weekendStats, longFreeStreaks, computeEmployeeMonth/
+  Annual, coverageByDay...) reescrita em cima de datas ISO
+  ("YYYY-MM-DD") em vez do formato "monthly" antigo com mês 0-indexado
+  — mais simples de portar pra React sem arrastar as duas convenções.
+- frontend/src/service/turnosApi.js (novo): cliente HTTP dos endpoints
+  novos (incluindo os de escrita — PUT/POST/PATCH/DELETE, os primeiros
+  desta app).
+
+3. SEPARADOR "ESCALA"
+-------------------------
+- frontend/src/components/Turnos/EscalaTab.jsx (novo): grelha de
+  pintura (pincel com os 7 turnos + apagar, clicar ou arrastar pinta),
+  cobertura M/T/N por dia com aviso visual, alerta de mais de 3 dias
+  livres seguidos, gestão de colaboradores (adicionar/ocultar/mostrar
+  todos/remover — estas ações são imediatas, não passam pelo botão
+  Guardar) e o botão "Guardar" que grava o mês inteiro de todos os
+  colaboradores de uma vez.
+  - Decisão técnica: o rascunho local (pintura ainda não guardada) é
+    reiniciado por REMOUNT do componente (`key={year-month}` no
+    componente pai), não por um `useEffect` a chamar `setState` — é o
+    padrão que o eslint deste projeto (react-hooks mais recente) exige
+    (apanhado só ao correr o lint, não adivinhado).
+  - Turnos.jsx pergunta confirmação antes de mudar de mês/ano/separador
+    se houver alterações da Escala por guardar — sem isto, seria fácil
+    perder trabalho sem querer (a ferramenta original gravava a cada
+    clique, esta não).
+
+4. SEPARADORES "ESTATÍSTICAS MENSAIS"/"ESTATÍSTICAS ANUAIS"
+------------------------------------------------------------------
+- frontend/src/components/Turnos/EstatisticasTab.jsx (novo):
+  reaproveitado pelos dois separadores (só muda `months`/`isAnnual`) —
+  rankings (dias trabalhados, horas noturnas, férias, FDS trabalhados),
+  tabela de totais por colaborador, distribuição % de turnos (barra
+  colorida por colaborador) e, só no anual, médias mensais por
+  colaborador (calculadas só sobre os meses com atividade de cada um,
+  igual ao original).
+
+5. SEPARADOR "MÉTRICAS INDIVIDUAIS"
+-----------------------------------------
+- frontend/src/components/Turnos/MetricasIndividuaisTab.jsx (novo):
+  seletor de operador + métrica, gráfico de barras (evolução mensal,
+  ano inteiro) com valores por cima de cada barra — reaproveita o
+  BarValueLabels.jsx já construído hoje pros gráficos do Report SLAs,
+  em vez de duplicar lógica.
+
+6. LIGAÇÃO NA APP
+-----------------------
+- frontend/src/pages/Turnos.jsx (novo): página com os 4 separadores +
+  seletor de mês/ano partilhado.
+- frontend/src/App.jsx: rota "/services/turnos".
+- frontend/src/layouts/MainLayout.jsx: link "Gestão de Turnos" na
+  sidebar.
+
+VALIDAÇÃO: `npx eslint` apanhou 3 problemas reais (não estilo) antes de
+eu reportar como pronto — 2 no EscalaTab.jsx (setState dentro de useEffect,
+corrigido com o padrão de remount por `key`) e 1 no EstatisticasTab.jsx
+(uma variável a ser alterada durante o render de uma lista, corrigido
+somando os totais num `.reduce()` à parte antes de renderizar). `npm run
+build` com sucesso depois das correções. Backend validado
+end-to-end com TestClient contra a dashboard.db real.
+
+LIMITAÇÃO: não há como testar a interação de arrastar-para-pintar nem
+ver a grelha renderizada sem abrir num browser real — a lógica e o
+fluxo de dados foram validados (build + testes de API), mas o
+comportamento visual/interativo fino (scroll, sticky columns, drag)
+vale a pena confirmar visualmente.

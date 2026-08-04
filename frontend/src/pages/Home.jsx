@@ -5,9 +5,15 @@ export default function Home() {
   const navigate = useNavigate();
 
   return (
-    // Removemos min-h-screen, flex centralizado e bg-slate-950 duplo
-    <div className="max-w-6xl mx-auto py-6">
-      <div className="w-full">
+    // Esta página fica fora do MainLayout (rota "/", sem sidebar/tema) e
+    // por isso NÃO faz parte do light/dark mode — precisa do seu próprio
+    // fundo escuro fixo aqui (antes dependia do <body> ser sempre escuro
+    // por padrão; deixou de o ser quando o toggle claro/escuro foi
+    // adicionado às páginas /services/*, e esta página ficava clara por
+    // trás com texto branco ilegível).
+    <div className="min-h-screen bg-slate-950 text-slate-100">
+      <div className="max-w-6xl mx-auto py-6 px-6">
+        <div className="w-full">
         <h1 className="text-4xl font-bold text-white mb-2">
           Claranet GCC Service Dashboard
         </h1>
@@ -40,6 +46,7 @@ export default function Home() {
             </button>
           </div>
         </div>
+      </div>
       </div>
     </div>
   );

@@ -8,13 +8,11 @@ import ReportsLayout from "./layouts/ReportsLayout.jsx";
 import Home from "./pages/Home.jsx";
 import DashboardServices from "./pages/DashboardServices.jsx";
 import SLA from "./pages/SLA.jsx";
-import Incidents from "./pages/Incidents.jsx";
-import Operators from "./pages/Operators.jsx";
-import Tools from "./pages/Tools.jsx";
-import Operations from "./pages/Operations.jsx";
+import CentralOperacional from "./pages/CentralOperacional.jsx";
+import AIOper from "./pages/AIOper.jsx";
+import Turnos from "./pages/Turnos.jsx";
 
 // Novas Páginas Analíticas Adicionadas
-import Quality from "./pages/Quality.jsx";
 import AdvancedSla from "./pages/AdvancedSla.jsx";
 
 import DashboardReports from "./pages/DashboardReports.jsx";
@@ -34,11 +32,9 @@ function App() {
         <Route path="/services" element={<DashboardServices />} />
         <Route path="/services/sla" element={<SLA />} />
         <Route path="/services/advanced-sla" element={<AdvancedSla />} />
-        <Route path="/services/quality" element={<Quality />} />
-        <Route path="/services/incidents" element={<Incidents />} />
-        <Route path="/services/operators" element={<Operators />} />
-        <Route path="/services/tools" element={<Tools />} />
-        <Route path="/services/operations" element={<Operations />} />
+        <Route path="/services/central-operacional" element={<CentralOperacional />} />
+        <Route path="/services/aioper" element={<AIOper />} />
+        <Route path="/services/turnos" element={<Turnos />} />
       </Route>
 
       {/* 3. Ecossistema do Dashboard de RELATÓRIOS (Usa o ReportsLayout) */}
