@@ -13,7 +13,7 @@ import { useTheme } from "@mui/material/styles";
  * ponto — sem precisar de repartir espaço entre séries vizinhas como
  * nas barras agrupadas.
  */
-export default function LineValueLabels({ data, series, categoryKey = "month" }) {
+export default function LineValueLabels({ data, series, categoryKey = "month", valueFormatter = String }) {
   const theme = useTheme();
   const xScale = useXScale();
   const yScale = useYScale();
@@ -38,7 +38,7 @@ export default function LineValueLabels({ data, series, categoryKey = "month" })
               fontWeight={600}
               fill={s.color || theme.palette.text.primary}
             >
-              {value}
+              {valueFormatter(value)}
             </text>
           );
         })

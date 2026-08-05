@@ -36,15 +36,56 @@ import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from config import settings
-from services import dashboard_service, incidents_service, operators_service, sla_service
+from services import team_service
 from services.servicenow_client import ServiceNowFetchError, _parse_csv_text, fetch_csv
-from services.transform import enrich_sys_report_template, exclude_hidden_technicians, exclude_canceled_incidents
 
 logger = logging.getLogger("cache")
 
 BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "dashboard.db"
 DOWNLOADS_DIR = BASE_DIR / "downloads"
+
+# Conta de automação (bot AIOPS) incluída sempre na busca de Despromovidos,
+# além dos operadores reais — pedido explícito do utilizador, já que o bot
+# também abre/trata P1s e deve entrar na mesma análise.
+DESPROMOVIDOS_EXTRA_USERNAMES = ("SAAIOPSP14",)
+
+
+def _build_despromovidos_url() -> str | None:
+    """
+    Monta a URL do Despromovidos_URL (task_sla_list.do) DINAMICAMENTE a
+    partir de team_service.USUARIOS + DESPROMOVIDOS_EXTRA_USERNAMES, em
+    vez de uma URL fixa no .env — pedido explícito do utilizador pra que
+    um operador novo entre automaticamente (só precisa ser adicionado a
+    USUARIOS, sem editar nenhuma URL à mão). Mesmos sysparm_fields do
+    SLA4_URL (schema idêntico — ver services/sla_service.py
+    prepare_sla_rows, reaproveitado aqui).
+
+    RESOLVIDO 2026-08: o filtro original só trazia linhas de SLA
+    CRIADAS por alguém da equipa — se a linha de SLA original P1 de um
+    incidente foi criada automaticamente (sistema/bot) e só a linha de
+    despromoção (mudança de prioridade) foi criada por um técnico, a
+    linha P1 original nunca vinha no export, e o algoritmo (que precisa
+    de ver a task começar como P1 — ver sla_service.get_p1_task_sets)
+    nunca detetava nada (sempre 0/0). Corrigido adicionando `^ORsla
+    LIKEP1^ORslaLIKENível 1` ao MESMO grupo OR — a query passa a trazer
+    QUALQUER linha cuja SLA mencione P1/Nível 1 (independente de quem
+    criou), MAIS as linhas criadas pela equipa (independente da
+    prioridade) — a união dá as duas peças que o algoritmo precisa por
+    task: a linha P1 original + a linha de mudança feita pela equipa.
+    """
+    usernames = list(team_service.USUARIOS.keys()) + list(DESPROMOVIDOS_EXTRA_USERNAMES)
+    if not usernames:
+        return None
+    ex_filter = "^OR".join(f"sys_created_by={u}" for u in usernames)
+    sla_filter = "^ORslaLIKEP1^ORslaLIKENível 1"
+    return (
+        "https://edpon.service-now.com/task_sla_list.do?EXCEL"
+        f"&sysparm_query=task.sys_class_name=incident^{ex_filter}{sla_filter}"
+        "&sysparm_fields=task,sys_created_on,sla,sla.type,stage,start_time,end_time,"
+        "business_duration,business_percentage,active,schedule,sys_created_by"
+    )
+
 
 # Mapeia nome da tabela -> possíveis nomes de ficheiro em downloads/.
 # A lista de candidatos por tabela é construída com:
@@ -76,10 +117,20 @@ def _build_filename_candidates() -> dict[str, list[str]]:
             "OK_URL.xls",
             "ok_.xls",
         ],
-        "tag_calls_gcc": [
-            settings.SN_FILENAME_TAG_CALLS_GCC,
-            "TAG_CALLS_GCC_URL.xls",
-            "tag_calls_gcc.xls",
+        # RENOMEADO 2026-08 de "tag_calls_gcc" (era label_entry_list.do,
+        # nível de tag/evento) — agora é incident_list.do, incidente a
+        # incidente, igual à forma de "gcc_abertos" (ver INCS_CALLS_GCC_URL).
+        "incs_calls_gcc": [
+            settings.SN_FILENAME_INCS_CALLS_GCC,
+            "INCS_CALLS_GCC_URL.xls",
+            "incs_calls_gcc.xls",
+        ],
+        # task_sla_list.do filtrado por autor (ver _build_despromovidos_url
+        # acima) — mesmo shape do SLA4_URL, mas restrito à equipa.
+        "despromovidos": [
+            settings.SN_FILENAME_DESPROMOVIDOS,
+            "Despromovidos_URL.xls",
+            "despromovidos.xls",
         ],
         # SharePoint (.xlsm), não ServiceNow — só via download manual (ver
         # SERVICENOW_URLS abaixo, sem URL de busca automática).
@@ -88,11 +139,18 @@ def _build_filename_candidates() -> dict[str, list[str]]:
             "JUSTIFICACOES_URL.xlsm",
             "justificacoes.xlsm",
         ],
+        # Idem — "Acompanhamento de Calls" (bridge/major incident calls),
+        # SharePoint .xlsx. Nome de tabela "calls", diferente de
+        # "incs_calls_gcc" (essa é um export do ServiceNow, sem relação).
+        "calls": [
+            settings.SN_FILENAME_CALLS,
+            "CALLS_URL.xlsx",
+            "calls.xlsx",
+        ],
         # Desativadas por agora (ver .env / config.py) — sem link novo ainda.
         # "sla3_grupos": [settings.SN_FILENAME_SLA3_GRUPOS, "sla3_grupos.csv"],
         # "users": [settings.SN_FILENAME_USERS, "users.csv"],
         # "auditkeys": [settings.SN_FILENAME_AUDITKEYS, "auditkeys.csv"],
-        # "despromovidos": [settings.SN_FILENAME_DESPROMOVIDOS, "despromovidos.csv"],
         # "mon_backlog_incs": [settings.SN_FILENAME_BACKLOG_INC, "mon_backlog_incs.csv"],
         # "mon_backlog_ritm": [settings.SN_FILENAME_BACKLOG_RITM, "mon_backlog_ritm.csv"],
     }
@@ -105,17 +163,18 @@ SERVICENOW_URLS = {
     "sla3_incidentes": lambda: settings.SLA3_URL,
     "sla4": lambda: settings.SLA4_URL,
     "ok_": lambda: settings.OK_URL,
-    "tag_calls_gcc": lambda: settings.TAG_CALLS_GCC_URL,
+    "incs_calls_gcc": lambda: settings.INCS_CALLS_GCC_URL,
+    "despromovidos": _build_despromovidos_url,  # dinâmica — ver função acima
     # Sempre None: JUSTIFICACOES_URL é SharePoint, não ServiceNow — a auth
     # de SN_USER/SN_PASS não serve pra isso, então nem tenta a busca
     # automática (iria só devolver a página de login em HTML). Cai direto
     # pro download manual em downloads/ (ver fetch_and_download_csvs).
     "justificacoes": lambda: None,
+    "calls": lambda: None,  # idem — CALLS_URL também é SharePoint.
     # Desativadas por agora (ver .env / config.py) — sem link novo ainda.
     # "sla3_grupos": lambda: settings.SLA3_GROUPS_URL,
     # "users": lambda: settings.USERS_URL,
     # "auditkeys": lambda: settings.AUDITKEYS_URL,
-    # "despromovidos": lambda: settings.DESPROMOVIDOS_URL,
     # "mon_backlog_incs": lambda: settings.BACKLOG_INC_URL,
     # "mon_backlog_ritm": lambda: settings.BACKLOG_RITM_URL,
 }
@@ -132,7 +191,8 @@ TABLE_KEYS: dict[str, tuple[str, ...]] = {
     "sla3_incidentes": ("Number",),
     "sla4": ("Task", "Start time"),
     "ok_": ("Title",),
-    "tag_calls_gcc": ("Title",),
+    "incs_calls_gcc": ("Number",),
+    "despromovidos": ("Task", "Start time"),
 }
 
 CACHE: dict = {"errors": {}, "last_updated": None}
@@ -143,6 +203,7 @@ CACHE: dict = {"errors": {}, "last_updated": None}
 # — ver _read_csv_file(sheet_name=...) e fetch_and_download_csvs().
 SHEET_NAMES: dict[str, str] = {
     "justificacoes": "Justificações",
+    "calls": "Sheet-1-Acompanhamento de Calls",
 }
 
 
@@ -429,6 +490,27 @@ def _save_justificacoes_table(conn: sqlite3.Connection, df: pd.DataFrame):
     conn.commit()
 
 
+def _save_calls_table(conn: sqlite3.Connection, df: pd.DataFrame):
+    """
+    Grava "Acompanhamento de Calls" (SharePoint, CALLS_URL) por
+    SUBSTITUIÇÃO total — mesmo raciocínio de _save_justificacoes_table
+    (planilha mantida manualmente, sem conceito de purga/backlog).
+    Colunas mantidas tal como vêm (cabeçalhos com espaços/acentos, ex:
+    "Id de ticket", "Data de Inicio") — quem for consumir isto faz o
+    rename explícito, como o resto da app já faz pros exports brutos.
+    """
+    df.to_sql("calls", conn, if_exists="replace", index=False)
+    conn.commit()
+
+
+# Tabelas gravadas por SUBSTITUIÇÃO total (SharePoint, sem UPSERT
+# incremental — ver as funções acima) em vez do padrão _upsert_dataframe.
+REPLACE_TABLE_SAVERS = {
+    "justificacoes": _save_justificacoes_table,
+    "calls": _save_calls_table,
+}
+
+
 def _store_and_clean_csvs(dfs: dict) -> dict:
     """
     Grava cada DataFrame no SQLite de forma incremental (UPSERT, ver
@@ -442,15 +524,15 @@ def _store_and_clean_csvs(dfs: dict) -> dict:
     conn = sqlite3.connect(DB_PATH)
     try:
         for table_name, df in dfs.items():
-            is_replace_table = table_name == "justificacoes"
+            replace_saver = REPLACE_TABLE_SAVERS.get(table_name)
             key_columns = TABLE_KEYS.get(table_name)
-            if not is_replace_table and not key_columns:
+            if not replace_saver and not key_columns:
                 logger.warning("Sem chave definida em TABLE_KEYS pra '%s' — a saltar gravação incremental.", table_name)
                 continue
 
             try:
-                if is_replace_table:
-                    _save_justificacoes_table(conn, df)
+                if replace_saver:
+                    replace_saver(conn, df)
                 else:
                     _upsert_dataframe(conn, table_name, df, key_columns)
 
@@ -471,112 +553,47 @@ def _store_and_clean_csvs(dfs: dict) -> dict:
     return errors
 
 
-def _compute_derived_cache(dfs: dict) -> tuple[dict, dict]:
-    result: dict = {}
-    errors: dict = {}
-
-    raw_principal = dfs.get("gcc_abertos")
-    if raw_principal is not None:
-        # Exclui técnicos ocultos (ver HIDDEN_TECNICOS em transform.py) já
-        # aqui, pois raw_principal também é usado como conjunto de
-        # cruzamento do SLA3 mais abaixo — não só dentro do enrich().
-        raw_principal = exclude_hidden_technicians(raw_principal, column="Opened by")
-        raw_principal = exclude_canceled_incidents(raw_principal, column="State")
-    principal_keys = (
-        "kpis", "priority_breakdown", "tools_breakdown",
-        "incidents_summary", "operators_summary", "quality_metrics",
-        "aioper_summary", "sem_evento_summary",
-    )
-    sla1_sla2 = None
-    if raw_principal is not None:
-        try:
-            enriched = enrich_sys_report_template(raw_principal)
-            # Guardado pra permitir filtrar por operador sob demanda (ver
-            # routers/operators.py -> GET /api/operators/{tecnico}), sem
-            # precisar rebaixar/re-fetch a cada clique no frontend.
-            result["_enriched_principal"] = enriched
-            result["kpis"] = dashboard_service.get_kpis(enriched)
-            result["priority_breakdown"] = dashboard_service.get_priority_breakdown(enriched)
-            result["tools_breakdown"] = dashboard_service.get_tools_breakdown(enriched)
-            result["incidents_summary"] = incidents_service.get_incidents_summary(enriched)
-            result["operators_summary"] = operators_service.get_operators_summary(enriched)
-            result["aioper_summary"] = dashboard_service.get_aioper_summary(enriched)
-            sla1_sla2 = dashboard_service.get_sla1_sla2(enriched)
-            from services import quality_service
-            result["quality_metrics"] = quality_service.get_quality_metrics(enriched)
-            result["sem_evento_summary"] = quality_service.get_sem_evento_breakdown(enriched)
-        except Exception as exc:  # noqa: BLE001
-            msg = f"Falha ao calcular métricas: {type(exc).__name__}: {exc}"
-            logger.exception(msg)
-            for key in principal_keys:
-                errors[key] = msg
-    else:
-        msg = "CSV 'gcc_abertos' indisponível neste ciclo."
-        for key in principal_keys:
-            errors[key] = msg
-
-    raw_sla3 = dfs.get("sla3_incidentes")
-    if raw_sla3 is not None:
-        raw_sla3 = exclude_hidden_technicians(raw_sla3, column="Opened by")
-        raw_sla3 = exclude_canceled_incidents(raw_sla3, column="State")
-    raw_sla4 = dfs.get("sla4")
-    sla_keys = ("sla_overview", "sla3_detailed", "sla4_detailed")
-    if raw_sla3 is not None and raw_sla4 is not None and raw_principal is not None:
-        try:
-            sla3_sla4 = sla_service.get_sla_overview(raw_sla3, raw_sla4, raw_principal)
-            default_sla1 = {"avg_seconds": 0, "avg_time": "00:00:00", "target_minutes": 15}
-            default_sla2 = {"pct": 0.0, "target": 90}
-            result["sla_overview"] = {
-                "sla1": (sla1_sla2 or {}).get("sla1", default_sla1),
-                "sla2": (sla1_sla2 or {}).get("sla2", default_sla2),
-                "sla3": sla3_sla4["sla3"],
-                "sla4": sla3_sla4["sla4"],
-            }
-            result["sla3_detailed"] = result["sla_overview"]["sla3"]
-            result["sla4_detailed"] = result["sla_overview"]["sla4"]
-        except Exception as exc:  # noqa: BLE001
-            msg = f"Falha ao calcular SLA3/SLA4: {type(exc).__name__}: {exc}"
-            logger.exception(msg)
-            for key in sla_keys:
-                errors[key] = msg
-    else:
-        missing = [n for n, d in (("sla3_incidentes", raw_sla3), ("sla4", raw_sla4), ("gcc_abertos", raw_principal)) if d is None]
-        for key in sla_keys:
-            errors[key] = f"CSVs indisponíveis: {', '.join(missing)}"
-
-    raw_backlog_inc = dfs.get("mon_backlog_incs")
-    raw_backlog_ritm = dfs.get("mon_backlog_ritm")
-    if raw_backlog_inc is not None or raw_backlog_ritm is not None:
-        try:
-            from services import backlog_service
-            result["backlog_summary"] = backlog_service.get_backlog_summary(raw_backlog_inc, raw_backlog_ritm)
-        except Exception as exc:  # noqa: BLE001
-            errors["backlog_summary"] = f"Erro no cálculo de Backlog: {exc}"
-    else:
-        errors["backlog_summary"] = "CSVs de backlog indisponíveis."
-
-    raw_despromovidos = dfs.get("despromovidos")
-    if raw_despromovidos is not None:
-        try:
-            from services import audit_service
-            result["despromovidos_summary"] = audit_service.get_despromovidos_metrics(raw_despromovidos)
-        except Exception as exc:  # noqa: BLE001
-            errors["despromovidos_summary"] = f"Erro em Despromovidos: {exc}"
-    else:
-        errors["despromovidos_summary"] = "CSV 'despromovidos' indisponível."
-
-    return result, errors
+# backlog: tabela desativada (ver _build_filename_candidates/
+# SERVICENOW_URLS — sem link novo configurado ainda), então nunca aparece
+# em `dfs`. Erro fixo em vez de recalcular (ver nota de otimização em
+# refresh_all abaixo). "despromovidos" DEIXOU de estar aqui (2026-08):
+# ativada com URL dinâmica (ver _build_despromovidos_url) — agora lida
+# pelo history_service.py/major_incs_service.py, não mais por este CACHE.
+_DISABLED_TABLE_ERRORS = {
+    "backlog_summary": "CSVs de backlog indisponíveis (tabela desativada, sem link configurado).",
+}
 
 
 def refresh_all():
+    """
+    RESOLVIDO (otimização 2026-08): até aqui, cada ciclo (a cada
+    CACHE_REFRESH_MINUTES, default 20 min, pra sempre) também rodava
+    `_compute_derived_cache()` — um pipeline COMPLETO de enrich +
+    ~12 funções de métricas (kpis, priority_breakdown, tools_breakdown,
+    incidents_summary, operators_summary, quality_metrics, aioper_
+    summary, sem_evento_summary, sla_overview, sla3/sla4_detailed) só
+    pra popular `CACHE`. Migração 2026-08 anterior já tinha movido TODOS
+    os endpoints que serviam esses dados pra ler do histórico no SQLite
+    (history_service.py) em vez de `CACHE` — confirmado pelos routers
+    (dashboard.py, sla.py, incidents.py, operators.py, analytics.py):
+    nenhum lê mais essas chaves de `CACHE`. Só `backlog_summary`/
+    `despromovidos_summary` ainda liam de `CACHE` (analytics.py), e essas
+    tabelas estavam desativadas (nunca vinham em `dfs`), então davam
+    sempre erro mesmo assim. Ou seja: o cálculo inteiro rodava a cada
+    ciclo pra ninguém — removido. Só resta o que importa de verdade:
+    baixar + gravar no SQLite (fetch_and_download_csvs +
+    _store_and_clean_csvs), que é o que history_service de facto lê.
+
+    "despromovidos" foi reativada depois (2026-08, URL dinâmica — ver
+    _build_despromovidos_url), mas passou a ser consumida via
+    history_service.py/major_incs_service.py, não voltou pro CACHE.
+    """
     logger.info("=== Iniciando ciclo de atualização do cache ===")
 
     dfs, download_errors = fetch_and_download_csvs()
     store_errors = _store_and_clean_csvs(dfs)
-    derived, compute_errors = _compute_derived_cache(dfs)
 
-    all_errors = {**download_errors, **store_errors, **compute_errors}
-    CACHE.update(derived)
+    all_errors = {**download_errors, **store_errors, **_DISABLED_TABLE_ERRORS}
     CACHE["errors"] = all_errors
     CACHE["last_updated"] = datetime.now().isoformat()
 

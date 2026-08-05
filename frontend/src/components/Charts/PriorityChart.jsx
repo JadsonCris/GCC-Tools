@@ -4,7 +4,16 @@ export default function PriorityChart({ data = [] }) {
   const r = 15.9155;
   const circ = 2 * Math.PI * r;
 
-  let currentOffset = 0;
+  // Offset acumulado de cada fatia calculado ANTES do render (não durante
+  // o .map() que devolve o JSX — mutar uma variável externa aí dentro
+  // dá erro de lint "Cannot reassign variable after render completes" e
+  // pode causar comportamento inconsistente em re-renders).
+  const offsets = data.reduce((acc, d) => {
+    const prevEnd = acc.length ? acc[acc.length - 1].end : 0;
+    const dash = total > 0 ? (d.val / total) * circ : 0;
+    acc.push({ start: prevEnd, end: prevEnd + dash, dash });
+    return acc;
+  }, []);
 
   if (!data.length) {
     return <p className="text-slate-500 text-sm">Sem dados disponíveis.</p>;
@@ -15,9 +24,8 @@ export default function PriorityChart({ data = [] }) {
       <div className="w-40 h-40 flex-shrink-0">
         <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
           {data.map((d, index) => {
-            const dash = total > 0 ? (d.val / total) * circ : 0;
-            const strokeDashoffset = -currentOffset;
-            currentOffset += dash;
+            const { dash, start } = offsets[index];
+            const strokeDashoffset = -start;
 
             return (
               <circle

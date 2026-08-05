@@ -23,13 +23,21 @@ class Settings:
     SLA3_URL = os.getenv("SLA3_URL")  # "SLA 3" — todos os P1 (incident_list.do)
     SLA4_URL = os.getenv("SLA4_URL")  # "SLA 4" — task_sla_list.do (ainda em estudo)
     OK_URL = os.getenv("OK_URL")  # "TAG OK" (label_entry_list.do)
-    TAG_CALLS_GCC_URL = os.getenv("TAG_CALLS_GCC_URL")  # "TAG CALLS_GCC" (label_entry_list.do)
+    # INCS_CALLS_GCC_URL = incidentes com a tag Calls_GCC (incident_list.do) —
+    # RENOMEADO 2026-08 de "TAG_CALLS_GCC_URL" (que era label_entry_list.do,
+    # nível de evento/tag, não de incidente) pro export atual, incidente a
+    # incidente — mesma forma de PRINCIPAL_URL. Ver cache.py.
+    INCS_CALLS_GCC_URL = os.getenv("INCS_CALLS_GCC_URL")
+
+    # DESPROMOVIDOS_URL não vem do .env — é construída dinamicamente em
+    # cache.py (_build_despromovidos_url) a partir de team_service.USUARIOS,
+    # pra incluir automaticamente qualquer operador novo sem precisar editar
+    # URL nenhuma à mão (pedido explícito do utilizador).
 
     # --- Desativadas por agora: sem link novo da instância edpon ainda ---
     SLA3_GROUPS_URL = os.getenv("SLA3_GROUPS_URL")
     USERS_URL = os.getenv("USERS_URL")
     AUDITKEYS_URL = os.getenv("AUDITKEYS_URL")
-    DESPROMOVIDOS_URL = os.getenv("DESPROMOVIDOS_URL")
     BACKLOG_INC_URL = os.getenv("BACKLOG_INC_URL")
     BACKLOG_RITM_URL = os.getenv("BACKLOG_RITM_URL")
 
@@ -49,16 +57,18 @@ class Settings:
     SN_FILENAME_SLA4 = os.getenv("SN_FILENAME_SLA4", "SLA4_URL.xls")
     SN_FILENAME_SLA3_GRUPOS = os.getenv("SN_FILENAME_SLA3_GRUPOS", "sla3_grupos.xls")
     SN_FILENAME_OK = os.getenv("SN_FILENAME_OK", "OK_URL.xls")
-    SN_FILENAME_TAG_CALLS_GCC = os.getenv("SN_FILENAME_TAG_CALLS_GCC", "TAG_CALLS_GCC_URL.xls")
+    SN_FILENAME_INCS_CALLS_GCC = os.getenv("SN_FILENAME_INCS_CALLS_GCC", "INCS_CALLS_GCC_URL.xls")
     SN_FILENAME_USERS = os.getenv("SN_FILENAME_USERS", "users.xls")
     SN_FILENAME_AUDITKEYS = os.getenv("SN_FILENAME_AUDITKEYS", "auditkeys.xls")
-    SN_FILENAME_DESPROMOVIDOS = os.getenv("SN_FILENAME_DESPROMOVIDOS", "despromovidos.xls")
+    SN_FILENAME_DESPROMOVIDOS = os.getenv("SN_FILENAME_DESPROMOVIDOS", "Despromovidos_URL.xls")
     SN_FILENAME_BACKLOG_INC = os.getenv("SN_FILENAME_BACKLOG_INC", "mon_backlog_incs.xls")
     SN_FILENAME_BACKLOG_RITM = os.getenv("SN_FILENAME_BACKLOG_RITM", "mon_backlog_ritm.xls")
     # JUSTIFICACOES_URL é do SharePoint (.xlsm), não do ServiceNow — não dá
     # pra buscar automaticamente com as credenciais SN_USER/SN_PASS (ver
     # cache.py, SERVICENOW_URLS). Só é lido manualmente de downloads/.
     SN_FILENAME_JUSTIFICACOES = os.getenv("SN_FILENAME_JUSTIFICACOES", "JUSTIFICACOES_URL.xlsm")
+    # Mesma situação de CALLS_URL — SharePoint (.xlsx), só manual.
+    SN_FILENAME_CALLS = os.getenv("SN_FILENAME_CALLS", "CALLS_URL.xlsx")
 
     # --- Table REST API (reservado/futuro) ---
     _principal = os.getenv("PRINCIPAL_URL") or ""

@@ -18,7 +18,15 @@ import sqlite3
 import pandas as pd
 
 from cache import DB_PATH
-from services import dashboard_service, incidents_service, operators_service, sla_service, team_service
+from services import (
+    dashboard_service,
+    incidents_service,
+    major_incs_service,
+    operational_activity_service,
+    operators_service,
+    sla_service,
+    team_service,
+)
 from services.justificacoes_service import parse_justificacoes
 from services.transform import (
     enrich_sys_report_template,
@@ -57,19 +65,6 @@ def _read_full_table(table_name: str) -> pd.DataFrame | None:
     finally:
         conn.close()
     return df.drop(columns=["_first_seen_at", "_last_seen_at", "_status"], errors="ignore")
-
-
-def _read_justificacoes_parsed() -> pd.DataFrame:
-    """
-    Lê a tabela "justificacoes" (SharePoint, ver cache._save_justificacoes_
-    table) e devolve já normalizada (ver justificacoes_service.
-    parse_justificacoes). Não depende de mês/intervalo/região — é uma
-    tabela de referência, lida inteira sempre que alguém precisa. Se a
-    tabela ainda não existir (nenhum ciclo gravou o ficheiro de
-    downloads/ ainda), devolve um DataFrame vazio e todo o resto do
-    pipeline trata isso como "sem justificações" (comportamento anterior).
-    """
-    return parse_justificacoes(_read_full_table("justificacoes"))
 
 
 def _filter_by_month(df: pd.DataFrame, date_col: str, month: str) -> pd.DataFrame:
@@ -139,13 +134,18 @@ def _filter_sla4_by_task_set(raw_sla4: pd.DataFrame, enriched_principal: pd.Data
     return raw_sla4[raw_sla4["Task"].astype(str).isin(valid)]
 
 
-def _compute_team_activity(enriched_principal: pd.DataFrame, raw_ok_filtered: pd.DataFrame | None) -> list[dict]:
+def _compute_team_and_operational_activity(
+    enriched_principal: pd.DataFrame, raw_ok_filtered: pd.DataFrame | None
+) -> tuple[list[dict], dict]:
     """
     Restringe a tabela "ok_" (já filtrada por data) aos incidentes que
     sobreviveram ao filtro de período+região+técnicos ocultos+cancelados
     do principal (ver team_service.filter_ok_by_incident_set — a tabela
-    "ok_" não tem região/técnico ocultos próprios), e devolve a
-    contagem por técnico (incidentes abertos + tags OK).
+    "ok_" não tem região/técnico ocultos próprios) UMA VEZ SÓ, e devolve
+    tanto a tabela simples por técnico (team_activity) quanto a análise
+    operacional mais rica (por hora/dia da semana/mês/turno/PT-BR — ver
+    operational_activity_service.py), que substituiu "Atividade da
+    Equipa" em Central Operacional.
     """
     incident_numbers = (
         set(enriched_principal["Incidente"].dropna().astype(str))
@@ -153,7 +153,9 @@ def _compute_team_activity(enriched_principal: pd.DataFrame, raw_ok_filtered: pd
         else set()
     )
     raw_ok_matched = team_service.filter_ok_by_incident_set(raw_ok_filtered, incident_numbers)
-    return team_service.get_team_activity(enriched_principal, raw_ok_matched)
+    team_activity = team_service.get_team_activity(enriched_principal, raw_ok_matched)
+    operational_activity = operational_activity_service.get_operational_activity(enriched_principal, raw_ok_matched)
+    return team_activity, operational_activity
 
 
 def _build_summary(raw_principal: pd.DataFrame, label: dict, raw_justificacoes: pd.DataFrame | None = None) -> dict:
@@ -243,7 +245,7 @@ def get_monthly_summary(month: str, region: str | None = None) -> dict:
     raw_ok = _read_full_table("ok_")
     if raw_ok is not None:
         raw_ok = _filter_by_month(raw_ok, OK_DATE_COL, month)
-    result["team_activity"] = _compute_team_activity(enriched_principal, raw_ok)
+    result["team_activity"], result["operational_activity"] = _compute_team_and_operational_activity(enriched_principal, raw_ok)
 
     result["sla_overview"] = {"sla1": sla1_sla2["sla1"], "sla2": sla1_sla2["sla2"], "sla3": sla3, "sla4": sla4}
     result["sla3_by_region"] = sla3_by_region
@@ -295,7 +297,7 @@ def get_range_summary(start: str, end: str, region: str | None = None) -> dict:
     raw_ok = _read_full_table("ok_")
     if raw_ok is not None:
         raw_ok = _filter_by_range(raw_ok, OK_DATE_COL, start, end)
-    result["team_activity"] = _compute_team_activity(enriched_principal, raw_ok)
+    result["team_activity"], result["operational_activity"] = _compute_team_and_operational_activity(enriched_principal, raw_ok)
 
     result["sla_overview"] = {"sla1": sla1_sla2["sla1"], "sla2": sla1_sla2["sla2"], "sla3": sla3, "sla4": sla4}
     result["sla3_by_region"] = sla3_by_region
@@ -367,19 +369,42 @@ def get_current_summary(month: str | None = None, region: str | None = None) -> 
     return get_monthly_summary(target_month, region=region)
 
 
-def get_sla_trend(region: str | None = None) -> list[dict]:
+def _month_slices(start: str, end: str) -> list[tuple[str, str, str]]:
     """
-    SLA1-4 + prioridade + evento, mês a mês, do mais antigo ao mais
-    recente — detalhe extra pedido pro Report SLAs (réplica do dashboard
-    "Service Level Management" original), independente do intervalo
-    selecionado no filtro de datas (mas respeita o filtro de geografia,
-    igual ao dashboard antigo). Reaproveita get_monthly_summary por mês;
-    como só há um punhado de meses de histórico, o custo é baixo.
+    [(rótulo 'YYYY-MM', fatia_start, fatia_end), ...] cobrindo [start,end]
+    mês a mês — cada fatia é a interseção desse mês com [start,end], não
+    o mês inteiro (ex: se o filtro começa a meio de julho, a fatia de
+    julho só conta a partir desse dia). Usado por get_sla_trend pra
+    respeitar o período escolhido no filtro em vez de mostrar sempre o
+    histórico completo.
     """
-    months = sorted(get_available_months())  # mais antigo primeiro, pra tendência
+    start_ts = pd.Timestamp(start)
+    end_ts = pd.Timestamp(end)
+    slices = []
+    cur = pd.Timestamp(year=start_ts.year, month=start_ts.month, day=1)
+    while cur <= end_ts:
+        month_end = cur + pd.offsets.MonthEnd(0)
+        slice_start = max(cur, start_ts)
+        slice_end = min(month_end, end_ts)
+        slices.append((cur.strftime("%Y-%m"), slice_start.strftime("%Y-%m-%d"), slice_end.strftime("%Y-%m-%d")))
+        cur = cur + pd.DateOffset(months=1)
+    return slices
+
+
+def get_sla_trend(start: str, end: str, region: str | None = None) -> list[dict]:
+    """
+    SLA1-4 + prioridade + evento, mês a mês, cobrindo só o intervalo
+    [start,end] escolhido no filtro de datas (mesma região também) —
+    RESOLVIDO 2026-08: antes disto mostrava sempre o histórico completo
+    disponível, independente do filtro selecionado; agora respeita
+    exatamente o período pedido, quebrado por mês pra dar a tendência
+    (cada mês parcialmente dentro do filtro só conta os dias dentro
+    dele — ver _month_slices).
+    """
+    slices = _month_slices(start, end)
     trend = []
-    for month in months:
-        summary = get_monthly_summary(month, region=region)
+    for month, slice_start, slice_end in slices:
+        summary = get_range_summary(slice_start, slice_end, region=region)
         overview = summary["sla_overview"]
         quality = summary["quality_metrics"]
         sem_evento = summary["sem_evento_summary"]
@@ -414,3 +439,40 @@ def get_sla_trend(region: str | None = None) -> list[dict]:
             "total_incidentes": summary["kpis"]["total_incidentes"],
         })
     return trend
+
+
+def get_major_incs_summary(start: str, end: str, region: str | None = None) -> dict:
+    """
+    Página "Major Incs": P1s tratados vs despromovidos (tabela
+    "despromovidos", cruzada com "sla3_incidentes" pra confirmar que
+    são P1 reais — ver major_incs_service.get_despromovidos_detail) +
+    Calls (tabela "calls", ver major_incs_service.get_calls_detail).
+
+    O detalhe de cada incidente despromovido (Date/Canal/Geo/Descrição)
+    é cruzado com "gcc_abertos" já filtrado pelo MESMO período/região
+    (mesma limitação já aceite pro SLA4-por-região existente, ver
+    _filter_sla4_by_task_set): um incidente aberto fora do período mas
+    com uma linha de SLA dentro dele aparece só com o número, sem
+    detalhe — cruzar com o histórico completo seria mais caro (reverte
+    a otimização do enrich_sys_report_template pra todo pedido) pra um
+    caso de borda raro.
+    """
+    raw_principal = _read_full_table("gcc_abertos")
+    enriched_principal = None
+    if raw_principal is not None:
+        raw_principal = _filter_by_range(raw_principal, GCC_ABERTOS_DATE_COL, start, end)
+        raw_principal = filter_by_region(raw_principal, region)
+        raw_principal = exclude_hidden_technicians(raw_principal, column="Opened by")
+        raw_principal = exclude_canceled_incidents(raw_principal, column="State")
+        raw_justificacoes = _read_full_table("justificacoes")
+        enriched_principal = enrich_sys_report_template(raw_principal, justificacoes=raw_justificacoes)
+
+    raw_despromovidos = _read_full_table("despromovidos")
+    raw_sla3 = _read_full_table("sla3_incidentes")
+    despromovidos = major_incs_service.get_despromovidos_detail(raw_despromovidos, enriched_principal, raw_sla3, start, end)
+
+    raw_calls = _read_full_table("calls")
+    raw_incs_calls_gcc = _read_full_table("incs_calls_gcc")
+    calls = major_incs_service.get_calls_detail(raw_calls, raw_incs_calls_gcc, start, end, region)
+
+    return {"start": start, "end": end, "despromovidos": despromovidos, "calls": calls}

@@ -6,7 +6,7 @@ import KPICard from "../components/KPI/KPICard";
 import PriorityBarChartMui from "../components/Charts/PriorityBarChartMui";
 import ToolsPieChartMui from "../components/Charts/ToolsPieChartMui";
 import SourceByDayTable from "../components/Tables/SourceByDayTable";
-import TeamActivityTable from "../components/Tables/TeamActivityTable";
+import OperationalActivitySection from "../components/Sections/OperationalActivitySection";
 
 export default function CentralOperacional() {
   const { range, region } = useDateRange();
@@ -68,14 +68,16 @@ export default function CentralOperacional() {
         {!isLoading && <SourceByDayTable data={summary?.source_by_day} />}
       </div>
 
-      {/* Incidentes Abertos + Tags OK por Técnico */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
-        <h2 className="text-xl font-bold text-slate-800 dark:text-white">Atividade da Equipa</h2>
+      {/* Atividade Operacional: abertos vs resolvidos, por hora/dia da
+          semana/mês/turno, visão global + individual, com agrupamento
+          PT/BR só de visualização (equipa, não geografia do incidente). */}
+      <div>
+        <h2 className="text-xl font-bold text-slate-800 dark:text-white">Atividade Operacional</h2>
         <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 mb-4">
-          Incidentes abertos e tags OK feitas por cada técnico, no período selecionado.
+          Incidentes abertos (por técnico) vs resolvidos (tags OK_GCC), no período selecionado.
         </p>
         {isLoading && <p className="text-slate-500 text-sm">Carregando...</p>}
-        {!isLoading && <TeamActivityTable data={summary?.team_activity} />}
+        {!isLoading && <OperationalActivitySection data={summary?.operational_activity} />}
       </div>
     </div>
   );

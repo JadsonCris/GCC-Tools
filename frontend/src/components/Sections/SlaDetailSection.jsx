@@ -41,8 +41,9 @@ export default function SlaDetailSection() {
   });
 
   const { data: trend = [], isLoading: loadingTrend } = useQuery({
-    queryKey: ["sla-trend", region],
-    queryFn: () => getSlaTrend(region),
+    queryKey: ["sla-trend", range?.start, range?.end, region],
+    queryFn: () => getSlaTrend(range.start, range.end, region),
+    enabled: !!range,
   });
 
   const quality = data?.quality_metrics;

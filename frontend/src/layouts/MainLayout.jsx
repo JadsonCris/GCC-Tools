@@ -5,6 +5,7 @@ import {
   Activity,
   ArrowLeft,
   Bot,
+  Siren,
   CalendarDays,
   Sun,
   Moon,
@@ -77,6 +78,10 @@ function MainLayout() {
             <Link to="/services/aioper" className={`flex items-center gap-3 ${isActive("/services/aioper")}`}>
               <Bot size={18} />
               AIOPER
+            </Link>
+            <Link to="/services/major-incs" className={`flex items-center gap-3 ${isActive("/services/major-incs")}`}>
+              <Siren size={18} />
+              Major Incs
             </Link>
             <Link to="/services/turnos" className={`flex items-center gap-3 ${isActive("/services/turnos")}`}>
               <CalendarDays size={18} />

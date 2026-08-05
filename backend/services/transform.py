@@ -19,19 +19,6 @@ from .justificacoes_service import parse_justificacoes, get_justified_map
 
 logger = logging.getLogger("transform")
 
-# Técnicos considerados "BR" e "PT" para efeitos de Turno / Geografia da Equipa
-# (extraído literalmente das SWITCH() do DAX — ajusta aqui se a equipa mudar)
-TECNICOS_BR = {
-    "Henrique Souza Claranet", "André Negry Claranet", "Bruno Caramelo Claranet",
-    "Matheus Souza Claranet", "Oriano Junior Claranet", "Samuel Souza Claranet",
-    "Edio Vital Claranet", "Guilherme Silva Claranet",
-}
-TECNICOS_PT = {
-    "Bruno Santos Claranet", "Miguel Santos Claranet", "Miguel Sequeira Claranet",
-    "Francisco Salgado Claranet", "Daniel Baptista Claranet", "Bruno Silva Claranet",
-    "Bruno Gomes Claranet", "Ricardo Silva Claranet",
-}
-
 # Lista fixa (além da convenção de sufixo "OM" — ver add_grupo_column)
 # pra gente da Monitorização cujo nome no ServiceNow não segue esse
 # padrão. Removi "Nuno Miguel Melo Machado Azevedo Martins Claranet"
@@ -216,12 +203,15 @@ def add_region_column(df: pd.DataFrame) -> pd.DataFrame:
     u_category) — não precisa mais de "category" pra decidir região.
     ASSUNÇÃO: só vi esses 3 valores de Parent na amostra; qualquer outro
     valor cai em "Ibéria" por default.
-    """
-    def region(row):
-        company = str(row.get("company", "") or "").upper()
-        return "Brasil" if "BRASIL" in company else "Ibéria"
 
-    df["Column Measure"] = df.apply(region, axis=1)
+    Vetorizado (otimização 2026-08, mesmo resultado do antigo df.apply(
+    axis=1) linha a linha, só que ~100x mais rápido em dataframes de
+    milhares de linhas — Series.str é C-level, o apply() chamava uma
+    função Python por linha).
+    """
+    company = df["company"] if "company" in df.columns else pd.Series("", index=df.index)
+    company = company.fillna("").astype(str).str.upper()
+    df["Column Measure"] = np.where(company.str.contains("BRASIL"), "Brasil", "Ibéria")
     return df
 
 
@@ -255,6 +245,10 @@ def add_grupo_column(df: pd.DataFrame) -> pd.DataFrame:
     maiúsculas sempre. Também cai em Monitorização quem estiver na lista
     fixa MONITORIZACAO_NOMES (gente cujo nome não segue essa convenção).
     Senão, "Operação".
+
+    Vetorizado (otimização 2026-08) — mesma prioridade AIOPER > Monitorização
+    > Operação do if/elif original, só com Series booleanas em vez de
+    percorrer linha a linha em Python.
     """
     has_channel = "channel" in df.columns
     if not has_channel:
@@ -266,47 +260,21 @@ def add_grupo_column(df: pd.DataFrame) -> pd.DataFrame:
             "_rename_raw_columns.", AIOPER_PREFIX,
         )
 
-    def grupo(row):
-        tecnico = str(row.get("Técnico", "") or "")
-        if has_channel:
-            channel = str(row.get("channel", "") or "").strip().upper()
-            if channel == AIOPER_CHANNEL_VALUE:
-                return "AIOPER"
-        if tecnico.upper().startswith(AIOPER_PREFIX):
-            return "AIOPER"
-        if tecnico.upper().endswith("OM") or tecnico in MONITORIZACAO_NOMES:
-            return "Monitorização"
-        return "Operação"
+    tecnico = df["Técnico"] if "Técnico" in df.columns else pd.Series("", index=df.index)
+    tecnico = tecnico.fillna("").astype(str)
+    tecnico_upper = tecnico.str.upper()
 
-    df["Grupo"] = df.apply(grupo, axis=1)
-    return df
+    is_aioper = tecnico_upper.str.startswith(AIOPER_PREFIX)
+    if has_channel:
+        channel = df["channel"].fillna("").astype(str).str.strip().str.upper()
+        is_aioper = is_aioper | (channel == AIOPER_CHANNEL_VALUE)
 
+    # MONITORIZACAO_NOMES compara com o nome tal como veio (não
+    # maiúsculas) — mesmo comportamento do `tecnico in MONITORIZACAO_NOMES`
+    # original, preservado aqui de propósito.
+    is_monitorizacao = tecnico_upper.str.endswith("OM") | tecnico.isin(MONITORIZACAO_NOMES)
 
-def add_turno_column(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Turno = Manhã/Tarde/Noite + sufixo de nacionalidade (BR/PT), baseado na
-    hora de abertura e na lista de técnicos.
-    """
-    def turno_base(hour, minute):
-        if (hour >= 23 and minute >= 30) or hour < 7 or (hour == 7 and minute <= 30):
-            return "Turno Noite"
-        if (hour >= 7 and minute >= 31) or hour < 15 or (hour == 15 and minute <= 30):
-            return "Turno Manhã"
-        return "Turno Tarde"
-
-    def turno(row):
-        dt = row["opened_at"]
-        if pd.isna(dt):
-            return "Turno Intermédio"
-        base = turno_base(dt.hour, dt.minute)
-        tecnico = row["Técnico"]
-        if tecnico in TECNICOS_BR:
-            return f"{base} - BR"
-        if tecnico in TECNICOS_PT:
-            return f"{base} - PT"
-        return "Turno Intermédio"
-
-    df["Turno"] = df.apply(turno, axis=1)
+    df["Grupo"] = np.select([is_aioper, is_monitorizacao], ["AIOPER", "Monitorização"], default="Operação")
     return df
 
 
@@ -324,7 +292,7 @@ def _find_keyword(text: str) -> str | None:
     return min(matches) if matches else None
 
 
-def _event_id(row) -> str:
+def _event_id_series(df: pd.DataFrame) -> pd.Series:
     """
     ASSUNÇÃO (migração 2026-08): a instância antiga tinha "u_ibm_event_id"
     com o identificador do evento de origem (ex: "TOOL::algo", "OEM_BKP...").
@@ -332,10 +300,17 @@ def _event_id(row) -> str:
     "correlation_id"/"correlation_display" fazem esse papel agora. Concateno
     os dois pra não perder sinal caso um venha vazio. Validar se o formato
     "PREFIXO::resto" (usado em Source abaixo) ainda aparece nesses campos.
+
+    Vetorizado + calculado UMA VEZ (otimização 2026-08): antes disto era
+    uma função por linha (`_event_id(row)`), chamada duas vezes por linha
+    (uma dentro de `keyword_found`, outra dentro de `source`, ambas em
+    add_keyword_columns) — reconstruía a mesma string do zero cada vez.
     """
-    correlation_id = str(row.get("correlation_id", "") or "")
-    correlation_display = str(row.get("correlation_display", "") or "")
-    return f"{correlation_id} {correlation_display}".strip()
+    correlation_id = df["correlation_id"] if "correlation_id" in df.columns else pd.Series("", index=df.index)
+    correlation_display = df["correlation_display"] if "correlation_display" in df.columns else pd.Series("", index=df.index)
+    correlation_id = correlation_id.fillna("").astype(str)
+    correlation_display = correlation_display.fillna("").astype(str)
+    return (correlation_id + " " + correlation_display).str.strip()
 
 
 def add_keyword_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -348,12 +323,14 @@ def add_keyword_columns(df: pd.DataFrame) -> pd.DataFrame:
     5. Por fim, procura no próprio correlation_id/correlation_display
 
     ASSUNÇÃO (migração 2026-08): a instância nova não exporta "description"
-    (só "short_description") nem "u_ibm_event_id" (ver _event_id acima) —
-    o passo de busca em "description" foi removido por falta de campo
-    equivalente.
+    (só "short_description") nem "u_ibm_event_id" (ver _event_id_series
+    acima) — o passo de busca em "description" foi removido por falta de
+    campo equivalente.
     """
+    event_id_series = _event_id_series(df)
+
     def keyword_found(row):
-        event_id = _event_id(row)
+        event_id = row["_event_id"]
         short_desc = str(row.get("short_description", "") or "")
 
         if "OEM_BKP" in event_id.upper():
@@ -381,12 +358,13 @@ def add_keyword_columns(df: pd.DataFrame) -> pd.DataFrame:
 
         return _find_keyword(event_id)
 
+    df["_event_id"] = event_id_series
     df["Keyword Found"] = df.apply(keyword_found, axis=1)
 
     def source(row):
         if row["Grupo"] == "Monitorização":
             return None
-        event_id = _event_id(row)
+        event_id = row["_event_id"]
         regiao = row["Column Measure"]
 
         base = None
@@ -410,6 +388,7 @@ def add_keyword_columns(df: pd.DataFrame) -> pd.DataFrame:
         return base
 
     df["Source"] = df.apply(source, axis=1)
+    df.drop(columns=["_event_id"], inplace=True)
     return df
 
 
@@ -434,7 +413,6 @@ def enrich_sys_report_template(df: pd.DataFrame, justificacoes: pd.DataFrame | N
     df = add_sla_columns(df)
     df = add_region_column(df)
     df = add_grupo_column(df)
-    df = add_turno_column(df)
     df = add_year_month_column(df)
     df = add_keyword_columns(df)
 

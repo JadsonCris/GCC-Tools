@@ -5,6 +5,7 @@ import { useTheme } from "@mui/material/styles";
 import BarValueLabels from "./BarValueLabels";
 import LineValueLabels from "./LineValueLabels";
 import ThresholdTrendLine from "./ThresholdTrendLine";
+import DateAxisGroups from "./DateAxisGroups";
 
 // Cores relativas ao tema MUI ativo (ver MuiThemeBridge em main.jsx) em
 // vez de hex fixos, pra eixos/grelha/legenda ficarem legíveis nos dois
@@ -15,6 +16,16 @@ const chartSx = (theme) => ({
   "& .MuiChartsGrid-line": { stroke: theme.palette.divider },
   "& .MuiChartsLegend-label": { fill: theme.palette.text.secondary },
 });
+
+// "2026-08-05" -> "5" — rótulo curto o suficiente pra o eixo conseguir
+// mostrar TODOS os dias sem o MUI X descartar por sobreposição (ver
+// `groupedDateAxis`), diferente do texto completo "YYYY-MM-DD", largo
+// demais pra caber um por dia num gráfico com várias semanas de dados.
+function dayOfMonthLabel(value) {
+  if (typeof value !== "string") return value;
+  const parts = value.split("-");
+  return parts.length === 3 ? String(Number(parts[2])) : value;
+}
 
 /**
  * Gráfico de tendência mensal genérico (linha ou barra), reaproveitado
@@ -28,11 +39,21 @@ const chartSx = (theme) => ({
  * só sabe centrar dentro da barra, e o LineChart não tem equivalente
  * nenhum (só tooltip ao passar o rato, que continua ativo também).
  */
-export default function TrendChart({ data = [], series = [], type = "line", height = 300, thresholdKey, thresholdColor = "#FAB138" }) {
+export default function TrendChart({
+  data = [],
+  series = [],
+  type = "line",
+  height = 300,
+  thresholdKey,
+  thresholdColor = "#FAB138",
+  xKey = "month",
+  valueFormatter,
+  groupedDateAxis = false,
+}) {
   const theme = useTheme();
 
-  if (data.length < 2) {
-    return <p className="text-slate-500 text-sm">Ainda sem histórico suficiente (precisa de 2+ meses).</p>;
+  if (data.length === 0) {
+    return <p className="text-slate-500 text-sm">Sem dados no período selecionado.</p>;
   }
 
   const Chart = type === "bar" ? BarChart : LineChart;
@@ -56,27 +77,33 @@ export default function TrendChart({ data = [], series = [], type = "line", heig
     <Chart
       height={height}
       dataset={data}
-      xAxis={[{ scaleType: type === "bar" ? "band" : "point", dataKey: "month", tickLabelStyle }]}
-      yAxis={[{ tickLabelStyle, ...yAxisExtra }]}
+      xAxis={[{
+        scaleType: type === "bar" ? "band" : "point",
+        dataKey: xKey,
+        tickLabelStyle,
+        ...(groupedDateAxis ? { valueFormatter: dayOfMonthLabel } : {}),
+      }]}
+      yAxis={[{ tickLabelStyle, ...(valueFormatter ? { valueFormatter } : {}), ...yAxisExtra }]}
       series={series.map((s) => ({ curve: "linear", ...s }))}
       grid={{ horizontal: true }}
-      margin={{ top: 24, bottom: 56 }}
+      margin={{ top: 24, bottom: groupedDateAxis ? 96 : 56 }}
       slotProps={{
         legend: {
           position: { vertical: "bottom", horizontal: "middle" },
-          padding: { top: 16 },
+          padding: { top: groupedDateAxis ? 56 : 16 },
         },
       }}
       sx={chartSx}
     >
       {type === "bar" ? (
-        <BarValueLabels data={data} series={series} categoryKey="month" />
+        <BarValueLabels data={data} series={series} categoryKey={xKey} {...(valueFormatter ? { valueFormatter } : {})} />
       ) : (
-        <LineValueLabels data={data} series={series} categoryKey="month" />
+        <LineValueLabels data={data} series={series} categoryKey={xKey} {...(valueFormatter ? { valueFormatter } : {})} />
       )}
       {thresholdKey && type === "bar" && (
-        <ThresholdTrendLine data={data} thresholdKey={thresholdKey} categoryKey="month" color={thresholdColor} />
+        <ThresholdTrendLine data={data} thresholdKey={thresholdKey} categoryKey={xKey} color={thresholdColor} />
       )}
+      {groupedDateAxis && <DateAxisGroups data={data} categoryKey={xKey} />}
     </Chart>
   );
 }

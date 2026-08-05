@@ -113,13 +113,18 @@ def range_summary(start: str, end: str, region: str | None = None):
 
 
 @router.get("/sla-trend")
-def sla_trend(region: str | None = None):
+def sla_trend(start: str, end: str, region: str | None = None):
     """
-    SLA1-4 mês a mês (histórico completo, independente do filtro de
-    datas selecionado) — detalhe extra do Report SLAs. `region`: filtro
-    de geografia opcional, igual aos demais endpoints.
+    SLA1-4 mês a mês, cobrindo só o intervalo [start,end] escolhido no
+    filtro de datas (RESOLVIDO 2026-08: antes mostrava sempre o
+    histórico completo, ignorando o filtro) — detalhe extra do Report
+    SLAs. `region`: filtro de geografia opcional, igual aos demais
+    endpoints.
     """
-    return {"months": history_service.get_sla_trend(region=region)}
+    try:
+        return {"months": history_service.get_sla_trend(start, end, region=region)}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao calcular tendência: {exc}") from exc
 
 
 @router.get("/incidents-by-status")

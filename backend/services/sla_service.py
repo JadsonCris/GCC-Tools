@@ -58,7 +58,7 @@ def _min_priority(sla_definition) -> int | None:
     return min(priorities) if priorities else None
 
 
-def _prepare_sla4(df: pd.DataFrame) -> pd.DataFrame:
+def prepare_sla_rows(df: pd.DataFrame) -> pd.DataFrame:
     """
     Renomeia os cabeçalhos REAIS da exportação EXCEL de task_sla_list.do
     (confirmados em backend/downloads/SLA4_URL.xls, após o SLA4_URL ser
@@ -145,24 +145,25 @@ def get_sla3_summary(
     }
 
 
-def _compute_sla4_from_prepared(df: pd.DataFrame) -> dict:
+def get_p1_task_sets(df: pd.DataFrame) -> tuple[set, set]:
     """
     Pra cada task (=incidente), ordena as linhas de SLA por "start_time"
     e olha a prioridade extraída de "sla_definition" (ver _min_priority):
-    se a PRIMEIRA linha é prioridade 1 e QUALQUER linha seguinte é de
-    prioridade diferente, a task conta como "P1 despromovido" (SLA4
-    quebrado). `total_tasks` aqui é o total de tasks que abriram como P1
-    (denominador natural da métrica), não o total geral de tasks.
-    """
-    if "task" not in df.columns or "_priority" not in df.columns:
-        return {
-            "sla4_not_achieved": 0, "sla4_count": 0, "sla4_justificados": 0,
-            "threshold_minutes": SLA4_TARGET_THRESHOLD, "total_tasks": 0,
-            "is_pending_validation": False, "available": False,
-        }
+    se a PRIMEIRA linha é prioridade 1, a task entra em `p1_tasks`
+    (abriu como P1); se QUALQUER linha seguinte é de prioridade
+    diferente, entra também em `bad_tasks` (P1 despromovido depois).
 
+    Devolve `(p1_tasks, bad_tasks)` — reaproveitado tanto por SLA4
+    (get_sla4_summary, todas as tasks de origem GCC) quanto por
+    major_incs_service.py (mesma lógica, mas sobre a tabela
+    "despromovidos", filtrada por autor da SLA em vez de origem do
+    incidente — schema idêntico, ver prepare_sla_rows).
+    """
     bad_tasks = set()
     p1_tasks = set()
+
+    if "task" not in df.columns or "_priority" not in df.columns:
+        return p1_tasks, bad_tasks
 
     for task, group in df.dropna(subset=["_priority", "start_time"]).groupby("task"):
         priorities = group.sort_values("start_time")["_priority"].tolist()
@@ -172,6 +173,19 @@ def _compute_sla4_from_prepared(df: pd.DataFrame) -> dict:
         if any(p != 1 for p in priorities[1:]):
             bad_tasks.add(task)
 
+    return p1_tasks, bad_tasks
+
+
+def _compute_sla4_from_prepared(df: pd.DataFrame) -> dict:
+    """Conta em cima de get_p1_task_sets — ver essa função pra lógica exata."""
+    if "task" not in df.columns or "_priority" not in df.columns:
+        return {
+            "sla4_not_achieved": 0, "sla4_count": 0, "sla4_justificados": 0,
+            "threshold_minutes": SLA4_TARGET_THRESHOLD, "total_tasks": 0,
+            "is_pending_validation": False, "available": False,
+        }
+
+    p1_tasks, bad_tasks = get_p1_task_sets(df)
     count = len(bad_tasks)
     return {
         "sla4_not_achieved": count,
@@ -191,7 +205,7 @@ def get_sla4_summary(df_sla4_raw: pd.DataFrame) -> dict:
     _compute_sla4_from_prepared pra lógica exata, confirmada com o
     negócio em 2026-08.
     """
-    df = _prepare_sla4(df_sla4_raw)
+    df = prepare_sla_rows(df_sla4_raw)
     return _compute_sla4_from_prepared(df)
 
 
@@ -228,7 +242,7 @@ def get_sla4_by_region(df_sla4_raw: pd.DataFrame, df_gcc_abertos_enriched: pd.Da
     ser o enriquecido, não o bruto, porque "Column Measure" só existe
     depois do enrich_sys_report_template).
     """
-    df = _prepare_sla4(df_sla4_raw)
+    df = prepare_sla_rows(df_sla4_raw)
     if "task" not in df.columns or df_gcc_abertos_enriched.empty:
         return {}
     region_map = df_gcc_abertos_enriched.set_index("Incidente")["Column Measure"].to_dict()

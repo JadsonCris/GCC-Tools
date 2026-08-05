@@ -78,11 +78,18 @@ export async function getRangeSummary(start, end, region) {
   return data;
 }
 
-export async function getSlaTrend(region) {
-  const params = {};
+export async function getSlaTrend(start, end, region) {
+  const params = { start, end };
   if (region && region !== "Global") params.region = region;
   const { data } = await api.get("/dashboard/sla-trend", { params });
   return data.months;
+}
+
+export async function getMajorIncs(start, end, region) {
+  const params = { start, end };
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/major-incs", { params });
+  return data;
 }
 
 export async function getIncidentsByStatus(status, start, end, region) {

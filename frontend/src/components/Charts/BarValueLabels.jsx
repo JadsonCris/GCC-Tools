@@ -17,7 +17,7 @@ import { useTheme } from "@mui/material/styles";
  * — internals/computeAxisValue.js, DEFAULT_BAR_GAP_RATIO) — só com
  * hooks públicos (useXScale/useYScale), sem depender de nada interno.
  */
-export default function BarValueLabels({ data, series, categoryKey = "month" }) {
+export default function BarValueLabels({ data, series, categoryKey = "month", valueFormatter = String }) {
   const theme = useTheme();
   const xScale = useXScale();
   const yScale = useYScale();
@@ -50,7 +50,7 @@ export default function BarValueLabels({ data, series, categoryKey = "month" }) 
               fontWeight={600}
               fill={theme.palette.text.primary}
             >
-              {value}
+              {valueFormatter(value)}
             </text>
           );
         })
