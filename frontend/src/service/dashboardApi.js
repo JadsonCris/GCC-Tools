@@ -17,6 +17,11 @@ export async function getToolsBreakdown() {
   return data;
 }
 
+export async function getAioperSummary() {
+  const { data } = await api.get("/dashboard/aioper");
+  return data;
+}
+
 export async function getIncidentsSummary() {
   const { data } = await api.get("/incidents");
   return data;
@@ -32,9 +37,66 @@ export async function getOperatorsSummary() {
   return data;
 }
 
+export async function getOperatorDetail(tecnico, start, end, region) {
+  const params = {};
+  if (start && end) {
+    params.start = start;
+    params.end = end;
+  }
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get(`/operators/${encodeURIComponent(tecnico)}`, { params });
+  return data;
+}
+
 export async function getCacheStatus() {
   const { data } = await api.get("/dashboard/status");
   return data;
+}
+
+export async function getAvailableMonths() {
+  const { data } = await api.get("/dashboard/months");
+  return data.months;
+}
+
+export async function getMonthlySummary(month, region) {
+  const params = {};
+  if (month) params.month = month;
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/dashboard/monthly", { params });
+  return data;
+}
+
+export async function getDateBounds() {
+  const { data } = await api.get("/dashboard/bounds");
+  return data;
+}
+
+export async function getRangeSummary(start, end, region) {
+  const params = { start, end };
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/dashboard/range", { params });
+  return data;
+}
+
+export async function getSlaTrend(start, end, region) {
+  const params = { start, end };
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/dashboard/sla-trend", { params });
+  return data.months;
+}
+
+export async function getMajorIncs(start, end, region) {
+  const params = { start, end };
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/major-incs", { params });
+  return data;
+}
+
+export async function getIncidentsByStatus(status, start, end, region) {
+  const params = { status, start, end };
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/dashboard/incidents-by-status", { params });
+  return data.incidents;
 }
 
 // 2. Conexões analíticas (backend: routers/analytics.py, prefixo /analytics)
@@ -60,5 +122,10 @@ export async function getSla4Detailed() {
 
 export async function getDespromovidosSummary() {
   const { data } = await api.get("/analytics/despromovidos");
+  return data;
+}
+
+export async function getSemEventoSummary() {
+  const { data } = await api.get("/analytics/sem-evento");
   return data;
 }

@@ -1,96 +1,134 @@
 # services/sla_service.py
 """
-Gera os dados de SLA3(Incidentes) e SLA4, replicando a lógica DAX real
-extraída dos .tmdl (SLA3_Incidentes_.tmdl, SLA4.tmdl) — não são
-aproximações. Duas colunas usadas aqui NÃO vêm prontas no CSV bruto do
-ServiceNow, são calculadas:
+Gera os dados de SLA3(Incidentes) e SLA4.
 
-- Region (SLA3): cruza `u_group_history` contra os nomes de
-  SLA3(Grupos)[name], OU contact_type/u_communication_sent. Por isso
-  get_sla3_summary() agora recebe também o DataFrame de sla3_grupos.
-- DifferenceInMinutesOrNotAchieved (SLA4): detecta se uma task foi
-  aberta como Crítico/P1 e foi "despromovida" (rebaixada) antes do
-  atendimento, usando PriorityAtOpen + prioridade atual da task.
+MIGRAÇÃO 2026-08 (instância edpon.service-now.com): a lógica de SLA3
+mudou por completo em relação à versão portada do .pbix original — não é
+mais réplica do DAX antigo (a tabela SLA3(Grupos) e os campos
+contact_type/u_communication_sent/u_group_history não existem mais na
+exportação nova). A nova definição (confirmada com o negócio):
+
+  SLA3% = (nº de incidentes P1 que também aparecem na lista "GCC Abertos",
+           cruzando por `number`) / (total de incidentes P1) * 100
+  Meta: 70%.
+
+SLA4 (migração 2026-08, RESOLVIDO): o SLA4_URL foi corrigido pra incluir
+o campo "sla" (sai no export como "SLA definition") — é o nome da
+definição de SLA anexada a cada linha de task_sla_list.do, e contém a
+prioridade embutida no texto (ex: "DGU-ADMO-SLA-INC-RES-P3+P4-SGCC-SENV",
+"DGU_EDP-SLA-INC-Prioridade Nível 3- IO (TResol)"). Lógica confirmada com
+o negócio: pra cada task (=incidente), ordena as linhas de SLA por
+"Start time"; se a PRIMEIRA linha é de prioridade 1 (P1/Nível 1) e
+QUALQUER linha seguinte é de prioridade diferente, conta como SLA4
+quebrado (P1 aberto e despromovido depois).
 """
+import re
+
 import pandas as pd
+
+from .justificacoes_service import get_justified_map
 
 SLA3_TARGET = 70  # 'SLA3 Target Value' no .pbix (NÃO é 95% — esse valor
                   # estava incorreto em sla_advanced_service.py)
+SLA3_THRESHOLD_PCT = 30  # linha de referência do gráfico SLA3 (100 - meta 70%)
 SLA4_TARGET_THRESHOLD = 3  # 'SLA4 Threshold'
 
-CRITICO_P1_MARKERS = ("CRITICO", "CRÍTICO", "-P1-", "-P1")
+# Casa "P1"/"P2"/"P3"/"P4" (com ou sem separador antes, tipo "-P3-",
+# "P3+P4", "IP3") OU "Nível N"/"Nivel N" (convenção "Prioridade Nível 3").
+# Fecha em \b pra não confundir a prioridade com outros números da string
+# (ex: "SLA10" não pode virar prioridade 1 e 0).
+_PRIORITY_PATTERN = re.compile(r"P([1-4])\b|N[íi]vel\s*([1-4])", re.IGNORECASE)
 
 
-def _prepare_sla3(df: pd.DataFrame) -> pd.DataFrame:
+def _extract_priorities(sla_definition) -> list[int]:
+    """Todas as prioridades mencionadas no nome da definição de SLA (pode ter mais de uma, ex: "P3+P4")."""
+    if not sla_definition or pd.isna(sla_definition):
+        return []
+    priorities = []
+    for m1, m2 in _PRIORITY_PATTERN.findall(str(sla_definition)):
+        num = m1 or m2
+        if num:
+            priorities.append(int(num))
+    return priorities
+
+
+def _min_priority(sla_definition) -> int | None:
+    """A prioridade mais severa (menor número) mencionada — ex: "P3+P4" -> 3."""
+    priorities = _extract_priorities(sla_definition)
+    return min(priorities) if priorities else None
+
+
+def prepare_sla_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Renomeia os cabeçalhos REAIS da exportação EXCEL de task_sla_list.do
+    (confirmados em backend/downloads/SLA4_URL.xls, após o SLA4_URL ser
+    corrigido pra incluir o campo "sla") pros nomes internos usados
+    abaixo.
+    """
     df = df.copy()
     df = df.loc[:, ~df.columns.duplicated()]
-    df["opened_at"] = pd.to_datetime(df.get("opened_at"), errors="coerce")
-    return df
-
-
-def _prepare_sla4(df: pd.DataFrame) -> pd.DataFrame:
-    df = df.copy()
-    df = df.loc[:, ~df.columns.duplicated()]
-    for col in ("start_time", "end_time", "task.opened_at"):
+    df = df.rename(columns={
+        "Task": "task",
+        "Created": "created",
+        "SLA definition": "sla_definition",
+        "Type": "type",
+        "Stage": "stage",
+        "Start time": "start_time",
+        "Stop time": "stop_time",
+        "Business elapsed time": "business_duration",
+        "Business elapsed percentage": "business_percentage",
+        "Active": "active",
+        "Schedule": "schedule",
+        "Created by": "created_by",
+    })
+    for col in ("created", "start_time", "stop_time"):
         if col in df.columns:
             df[col] = pd.to_datetime(df[col], errors="coerce")
+    if "sla_definition" in df.columns:
+        df["_priority"] = df["sla_definition"].apply(_min_priority)
     return df
 
 
-def _compute_region(df: pd.DataFrame, grupos: pd.DataFrame) -> pd.Series:
+def get_sla3_summary(
+    df_sla3_raw: pd.DataFrame,
+    df_gcc_abertos_raw: pd.DataFrame,
+    justificacoes_parsed: pd.DataFrame | None = None,
+) -> dict:
     """
-    Réplica da coluna calculada `Region` de SLA3(Incidentes).tmdl:
+    SLA3% = incidentes P1 (lista "SLA 3") que também aparecem na lista
+    "GCC Abertos" (match por `Number` — cabeçalho real confirmado em
+    backend/downloads/SLA3_URL.xls e PRINCIPAL_URL.xls), dividido pelo
+    total de P1s. Meta: 70%. Estas dataframes são as brutas (antes de
+    `enrich_sys_report_template`), por isso o cabeçalho é "Number" com N
+    maiúsculo, não "Incidente".
 
-      tagsList = u_group_history com "," trocado por "|"
-      matchedTag =
-        SE contact_type in {"GCC","MSP-Operations Center (OpsMon)"}
-           OU u_communication_sent = "true"
-        ENTÃO "TRUE"
-        SENÃO primeiro nome de SLA3(Grupos) que aparece como substring
-              em tagsList (senão BLANK)
+    `justificacoes_parsed` (migração 2026-08, RESOLVIDO): DataFrame já
+    normalizado por justificacoes_service.parse_justificacoes. P1s que
+    não bateram com "GCC Abertos" (not_achieved) mas têm justificação
+    aceite pra SLA3 saem de "not_achieved" e entram em "justificados" —
+    "não conta o SLA referido na tabela", igual ao pedido pro SLA2. O
+    "sla3_pct" continua a ser o número BRUTO (achieved/total), sem
+    ajuste pelas justificações — mesmo critério usado no SLA2.
     """
-    group_names = grupos["name"].dropna().astype(str).tolist() if "name" in grupos.columns else []
+    p1_numbers = df_sla3_raw.get("Number", pd.Series(dtype=str)).dropna().astype(str)
+    total = len(p1_numbers)
 
-    def region_for_row(row) -> str | None:
-        contact_type = str(row.get("contact_type", "") or "")
-        comm_sent = str(row.get("u_communication_sent", "") or "").lower()
-        if contact_type in ("GCC", "MSP-Operations Center (OpsMon)") or comm_sent == "true":
-            return "TRUE"
-        tags_list = str(row.get("u_group_history", "") or "").replace(",", "|")
-        for name in group_names:
-            if name and name in tags_list:
-                return name
-        return None
-
-    return df.apply(region_for_row, axis=1)
-
-
-def get_sla3_summary(df_sla3_raw: pd.DataFrame, df_sla3_grupos_raw: pd.DataFrame) -> dict:
-    """
-    Achieved     = Region preenchida E contact_type in {"MSP-Operations Center (OpsMon)", "GCC"}
-    Not Achieved = Region preenchida E contact_type fora dessa lista E Justificado SLA3? != "sim"
-    Justificados = Justificado SLA3? == "sim"
-    SLA3%        = Achieved / (Achieved + Not Achieved + Justificados) * 100
-    """
-    df = _prepare_sla3(df_sla3_raw)
-    df["Region"] = _compute_region(df, df_sla3_grupos_raw)
-
-    # Justificado SLA3? depende da tabela Justificações (SharePoint, fora
-    # do escopo) — sem ela, assume "não" pra todo mundo.
-    justificado = pd.Series("não", index=df.index)
-
-    has_region = df["Region"].notna()
-    contact_ok = df.get("contact_type", pd.Series(dtype=str)).isin(
-        ["MSP-Operations Center (OpsMon)", "GCC"]
+    gcc_numbers = set(
+        df_gcc_abertos_raw.get("Number", pd.Series(dtype=str)).dropna().astype(str)
     )
-    is_justificado = justificado.eq("sim")
 
-    achieved = int((has_region & contact_ok).sum())
-    not_achieved = int((has_region & ~contact_ok & ~is_justificado).sum())
-    justificados = int(is_justificado.sum())
+    achieved_mask = p1_numbers.isin(gcc_numbers)
+    achieved = int(achieved_mask.sum())
+    not_achieved_numbers = p1_numbers[~achieved_mask]
 
-    denom = achieved + not_achieved + justificados
-    sla3_pct = round((achieved / denom) * 100, 1) if denom else 0.0
+    if justificacoes_parsed is not None:
+        just_sla3 = get_justified_map(justificacoes_parsed, 3)
+        justificados = int(not_achieved_numbers.isin(just_sla3).sum())
+    else:
+        justificados = 0
+    not_achieved = len(not_achieved_numbers) - justificados
+
+    sla3_pct = round((achieved / total) * 100, 1) if total else 0.0
 
     return {
         "achieved": achieved,
@@ -99,94 +137,129 @@ def get_sla3_summary(df_sla3_raw: pd.DataFrame, df_sla3_grupos_raw: pd.DataFrame
         "sla3_pct": sla3_pct,
         "target": SLA3_TARGET,
         "target_value": SLA3_TARGET,  # alias — AdvancedSla.jsx espera este nome
+        "threshold_pct": SLA3_THRESHOLD_PCT,
+        "threshold_count": round(total * SLA3_THRESHOLD_PCT / 100, 1),
+        # False quando não há NENHUM P1 no período escolhido — nesse caso
+        # "0%" não é uma medida real de incumprimento, é ausência de dado.
+        "available": total > 0,
     }
 
 
-def _contains_any(text: str, markers: tuple) -> bool:
-    text_upper = str(text or "").upper()
-    return any(m in text_upper for m in markers)
+def get_p1_task_sets(df: pd.DataFrame) -> tuple[set, set]:
+    """
+    Pra cada task (=incidente), ordena as linhas de SLA por "start_time"
+    e olha a prioridade extraída de "sla_definition" (ver _min_priority):
+    se a PRIMEIRA linha é prioridade 1, a task entra em `p1_tasks`
+    (abriu como P1); se QUALQUER linha seguinte é de prioridade
+    diferente, entra também em `bad_tasks` (P1 despromovido depois).
+
+    Devolve `(p1_tasks, bad_tasks)` — reaproveitado tanto por SLA4
+    (get_sla4_summary, todas as tasks de origem GCC) quanto por
+    major_incs_service.py (mesma lógica, mas sobre a tabela
+    "despromovidos", filtrada por autor da SLA em vez de origem do
+    incidente — schema idêntico, ver prepare_sla_rows).
+    """
+    bad_tasks = set()
+    p1_tasks = set()
+
+    if "task" not in df.columns or "_priority" not in df.columns:
+        return p1_tasks, bad_tasks
+
+    for task, group in df.dropna(subset=["_priority", "start_time"]).groupby("task"):
+        priorities = group.sort_values("start_time")["_priority"].tolist()
+        if not priorities or priorities[0] != 1:
+            continue
+        p1_tasks.add(task)
+        if any(p != 1 for p in priorities[1:]):
+            bad_tasks.add(task)
+
+    return p1_tasks, bad_tasks
 
 
-def _compute_sla4_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Réplica de IsFirstSLA -> ContainsCriticoOrP1 -> PriorityAtOpen -> DifferenceInMinutesOrNotAchieved."""
-    df = df.copy()
+def _compute_sla4_from_prepared(df: pd.DataFrame) -> dict:
+    """Conta em cima de get_p1_task_sets — ver essa função pra lógica exata."""
+    if "task" not in df.columns or "_priority" not in df.columns:
+        return {
+            "sla4_not_achieved": 0, "sla4_count": 0, "sla4_justificados": 0,
+            "threshold_minutes": SLA4_TARGET_THRESHOLD, "total_tasks": 0,
+            "is_pending_validation": False, "available": False,
+        }
 
-    diff_seconds = (df["start_time"] - df["task.opened_at"]).dt.total_seconds().abs()
-    df["_is_first_sla"] = diff_seconds <= 1
-
-    df["_contains_critico_p1"] = df["sla"].apply(lambda s: _contains_any(s, CRITICO_P1_MARKERS))
-    df["_has_critico_p1_in_task"] = df.groupby("task")["_contains_critico_p1"].transform("any")
-
-    def priority_at_open(row):
-        if not row["_is_first_sla"]:
-            return None
-        sla_upper = str(row.get("sla", "") or "").upper()
-        if _contains_any(sla_upper, CRITICO_P1_MARKERS):
-            return "1 - CRITICAL"
-        if "VIP" in sla_upper and row["_has_critico_p1_in_task"]:
-            return "1 - CRITICAL"
-        if "VIP" in sla_upper:
-            return "2 - HIGH"
-        if "HIGH" in sla_upper:
-            return "2 - HIGH"
-        if "MEDIUM" in sla_upper:
-            return "3 - MEDIUM"
-        if "LOW" in sla_upper:
-            return "4 - LOW"
-        return None
-
-    df["_priority_at_open"] = df.apply(priority_at_open, axis=1)
-
-    def difference_result(row):
-        is_at_open = row["_is_first_sla"]
-        is_critico_at_open = "CRITICAL" in str(row["_priority_at_open"] or "").upper()
-        this_priority = str(row.get("task.priority", "") or "")
-        contains_critico_p1 = row["_contains_critico_p1"]
-
-        if is_critico_at_open and is_at_open:
-            if "CRITICAL" not in this_priority.upper():
-                return "Not Achieved"  # despromovido depois de aberto
-            return "Achieved"
-        if not is_critico_at_open and contains_critico_p1:
-            return "Achieved"
-        return None
-
-    df["DifferenceInMinutesOrNotAchieved"] = df.apply(difference_result, axis=1)
-    return df
+    p1_tasks, bad_tasks = get_p1_task_sets(df)
+    count = len(bad_tasks)
+    return {
+        "sla4_not_achieved": count,
+        "sla4_count": count,  # alias — AdvancedSla.jsx espera este nome
+        "sla4_justificados": 0,
+        "threshold_minutes": SLA4_TARGET_THRESHOLD,
+        "total_tasks": len(p1_tasks),
+        "is_pending_validation": False,
+        "available": len(p1_tasks) > 0,
+    }
 
 
 def get_sla4_summary(df_sla4_raw: pd.DataFrame) -> dict:
     """
-    SLA4 Count = nº de tasks distintas onde o valor MÁXIMO (alfabético —
-    "Not Achieved" > "Achieved") de DifferenceInMinutesOrNotAchieved é
-    "Not Achieved", e não justificado.
+    SLA4 = incidentes P1 (primeira task de SLA com prioridade 1) que
+    foram despromovidos pra outra prioridade depois — ver
+    _compute_sla4_from_prepared pra lógica exata, confirmada com o
+    negócio em 2026-08.
     """
-    df = _prepare_sla4(df_sla4_raw)
-    df = _compute_sla4_columns(df)
+    df = prepare_sla_rows(df_sla4_raw)
+    return _compute_sla4_from_prepared(df)
 
-    df["Justificado SLA4?"] = "não"  # sem fonte Justificações ainda
 
-    per_task_max = (
-        df.dropna(subset=["DifferenceInMinutesOrNotAchieved"])
-        .groupby("task")["DifferenceInMinutesOrNotAchieved"]
-        .max()
-    )
-    bad_tasks_all = set(per_task_max[per_task_max == "Not Achieved"].index)
-    justified_tasks = set(df.loc[df["Justificado SLA4?"] == "sim", "task"].unique())
-    bad_tasks_not_justified = bad_tasks_all - justified_tasks
+def _region_for_parent(value) -> str:
+    """Mesma regra de transform.add_region_column, aplicada ao campo bruto "Parent"."""
+    return "Brasil" if "BRASIL" in str(value or "").upper() else "Ibéria"
 
-    count = len(bad_tasks_not_justified)
+
+def get_sla3_by_region(
+    df_sla3_raw: pd.DataFrame,
+    df_gcc_abertos_raw: pd.DataFrame,
+    justificacoes_parsed: pd.DataFrame | None = None,
+) -> dict:
+    """
+    SLA3 quebrado por região (Ibéria/Brasil) — detalhe extra pedido pro
+    Report SLAs. Região vem do campo bruto "Parent" de cada P1 (mesma
+    regra usada em transform.add_region_column, mas aqui aplicada antes
+    do enrich porque df_sla3_raw é a tabela bruta).
+    """
+    if df_sla3_raw.empty or "Parent" not in df_sla3_raw.columns:
+        return {}
+    regions = df_sla3_raw["Parent"].apply(_region_for_parent)
     return {
-        "sla4_not_achieved": count,
-        "sla4_count": count,  # alias — AdvancedSla.jsx espera este nome
-        "sla4_justificados": len(justified_tasks),
-        "threshold_minutes": SLA4_TARGET_THRESHOLD,
+        region_name: get_sla3_summary(df_sla3_raw[regions == region_name], df_gcc_abertos_raw, justificacoes_parsed)
+        for region_name in sorted(regions.unique())
     }
 
 
-def get_sla_overview(df_sla3_raw: pd.DataFrame, df_sla4_raw: pd.DataFrame, df_sla3_grupos_raw: pd.DataFrame) -> dict:
+def get_sla4_by_region(df_sla4_raw: pd.DataFrame, df_gcc_abertos_enriched: pd.DataFrame) -> dict:
+    """
+    SLA4 quebrado por região. A exportação de task_sla_list.do não traz
+    região direta — cruza "task" (número do incidente) com "Coluna
+    Measure" (região) já calculada no gcc_abertos ENRIQUECIDO (precisa
+    ser o enriquecido, não o bruto, porque "Column Measure" só existe
+    depois do enrich_sys_report_template).
+    """
+    df = prepare_sla_rows(df_sla4_raw)
+    if "task" not in df.columns or df_gcc_abertos_enriched.empty:
+        return {}
+    region_map = df_gcc_abertos_enriched.set_index("Incidente")["Column Measure"].to_dict()
+    df = df.copy()
+    df["_region"] = df["task"].map(region_map)
+    df = df[df["_region"].notna()]
+    if df.empty:
+        return {}
+    return {
+        region_name: _compute_sla4_from_prepared(df[df["_region"] == region_name])
+        for region_name in sorted(df["_region"].unique())
+    }
+
+
+def get_sla_overview(df_sla3_raw: pd.DataFrame, df_sla4_raw: pd.DataFrame, df_gcc_abertos_raw: pd.DataFrame) -> dict:
     """Combina SLA3 + SLA4 num único payload para a página SLA.jsx."""
     return {
-        "sla3": get_sla3_summary(df_sla3_raw, df_sla3_grupos_raw),
+        "sla3": get_sla3_summary(df_sla3_raw, df_gcc_abertos_raw),
         "sla4": get_sla4_summary(df_sla4_raw),
     }

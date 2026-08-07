@@ -10,14 +10,14 @@ export default function KPICard({
   return (
     <div
       className="
-      bg-slate-900
+      bg-white dark:bg-slate-900
       border
-      border-slate-800
+      border-slate-300 dark:border-slate-800
       rounded-2xl
       p-5
       "
     >
-      <p className="text-slate-400 text-sm">
+      <p className="text-slate-500 dark:text-slate-400 text-sm">
         {title}
       </p>
 

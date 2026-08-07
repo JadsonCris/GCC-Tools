@@ -4,9 +4,14 @@
 
 body {
   margin: 0;
+  background: #f1f5f9;
+  color: #1e293b;
+  font-family: Inter, sans-serif;
+}
+
+html.dark body {
   background: #020617;
   color: white;
-  font-family: Inter, sans-serif;
 }
 
 ::-webkit-scrollbar {
@@ -14,6 +19,10 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
+  background: #cbd5e1;
   border-radius: 10px;
+}
+
+html.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
 }

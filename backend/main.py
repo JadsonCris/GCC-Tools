@@ -6,7 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cache import start_scheduler
 from config import settings
-from routers import dashboard, sla, incidents, operators, analytics
+from routers import dashboard, sla, incidents, operators, analytics, turnos, major_incs
+from services.turnos_service import seed_if_empty
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,10 +25,13 @@ app.include_router(sla.router, prefix="/api")
 app.include_router(incidents.router, prefix="/api")
 app.include_router(operators.router, prefix="/api")
 app.include_router(analytics.router, prefix="/api")
+app.include_router(turnos.router, prefix="/api")
+app.include_router(major_incs.router, prefix="/api")
 
 
 @app.on_event("startup")
 def on_startup():
+    seed_if_empty()
     start_scheduler()
 
 

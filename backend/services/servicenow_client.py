@@ -1,8 +1,8 @@
 # services/servicenow_client.py
 """
-Cliente HTTP robusto pra buscar CSVs do ServiceNow. Usado pelo cache.py
-em vez de requests.get() puro — as proteções abaixo foram validadas ao
-longo de bastante troubleshooting real (não são teóricas):
+Cliente HTTP robusto pra buscar os exports do ServiceNow. Usado pelo
+cache.py em vez de requests.get() puro — as proteções abaixo foram
+validadas ao longo de bastante troubleshooting real (não são teóricas):
 
 1. trust_env=False: desliga autodetecção de proxy do SO (Windows WPAD),
    que causava travamentos de minutos sem erro nem timeout disparando.
@@ -12,19 +12,25 @@ longo de bastante troubleshooting real (não são teóricas):
 3. Retry-on-202: o ServiceNow gera alguns relatórios pesados de forma
    assíncrona (devolve 202 "processando"). Em vez de falhar na hora,
    espera e tenta de novo (5,10,15,20,30s = ~90s de paciência total).
-4. Delimitador de CSV com fallback (vírgula/;/tab) pra exports que o
-   sniffer automático do pandas não reconhece de primeira.
+4. Migração 2026-08: as URLs trocaram de "?CSV&" pra "?EXCEL&" (instância
+   edpon.service-now.com) — a resposta agora é um .xls binário (OLE2,
+   assinatura \\xD0\\xCF\\x11\\xE0), não texto. `fetch_csv()` detecta o
+   formato pela assinatura e usa `pd.read_excel` (via `xlrd`); se algum
+   dia uma URL voltar a usar "?CSV&", ainda cai no parser de texto antigo.
 """
 import csv
 import logging
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
-from io import StringIO
+from io import BytesIO, StringIO
 
 import pandas as pd
 import requests
 
 from config import settings
+
+_XLS_OLE2_MAGIC = b"\xd0\xcf\x11\xe0"
+_HTML_MARKERS = (b"<!doctype", b"<html")
 
 logger = logging.getLogger("servicenow_client")
 
@@ -72,9 +78,10 @@ def _get_with_failsafe(url: str, *, params: dict | None = None, timeout: tuple[i
 
 def fetch_csv(url: str, *, timeout: tuple[int, int] = (10, 60)) -> pd.DataFrame:
     """
-    Busca uma URL de export CSV do ServiceNow e devolve um DataFrame já
-    com cabeçalhos limpos. Read timeout generoso (60s) porque esses
-    relatórios podem demorar pra responder mesmo antes de darem 202.
+    Busca uma URL de export do ServiceNow (EXCEL ou, por compatibilidade,
+    CSV) e devolve um DataFrame já com cabeçalhos limpos. Read timeout
+    generoso (60s) porque esses relatórios podem demorar pra responder
+    mesmo antes de darem 202.
     """
     if not url:
         raise ServiceNowFetchError("URL vazia/ não configurada no .env")
@@ -107,28 +114,58 @@ def fetch_csv(url: str, *, timeout: tuple[int, int] = (10, 60)) -> pd.DataFrame:
         raise ServiceNowFetchError(f"401 Unauthorized em {url} — confere SN_USER/SN_PASS no .env.")
     resp.raise_for_status()
 
-    content_type = resp.headers.get("Content-Type", "")
-    text = resp.text
+    content = resp.content
+    logger.info(
+        "Resposta de %s: %d bytes, Content-Type=%s, primeiros bytes=%r",
+        url, len(content), resp.headers.get("Content-Type", ""), content[:16],
+    )
 
-    if "text/html" in content_type or text.strip().startswith("<!DOCTYPE") or text.strip().startswith("<html"):
+    if not content.strip():
+        raise ServiceNowFetchError(
+            f"A resposta de {url} veio vazia. O relatório pode não ter "
+            "linhas no período atual, ou a query pode estar errada."
+        )
+
+    if _looks_like_html_login(content):
         raise ServiceNowFetchError(
             f"A resposta de {url} veio como HTML (provavelmente página de "
             "login). Verifica SN_USER/SN_PASS no .env ou se a instância "
             "exige SSO em vez de Basic Auth."
         )
 
-    sample = text[:400].replace("\n", "\\n")
-    logger.info("Amostra de %s (primeiros 400 chars): %r", url, sample)
-
-    if not text.strip():
-        raise ServiceNowFetchError(
-            f"A resposta de {url} veio vazia. O relatório pode não ter "
-            "linhas no período atual, ou o jvar_report_id pode estar errado."
-        )
-
-    df = _parse_csv_text(text, url)
+    df = _parse_response_bytes(content, url)
     df.columns = [str(c).strip() for c in df.columns]
     return df
+
+
+def _looks_like_html_login(content: bytes) -> bool:
+    sniff = content[:1024].strip().lower()
+    return sniff.startswith(_HTML_MARKERS) or b"<html" in sniff
+
+
+def _parse_response_bytes(content: bytes, url: str) -> pd.DataFrame:
+    """
+    A instância nova exporta em EXCEL (.xls binário legado, assinatura
+    OLE2). Se uma URL ainda usar "?CSV&", a resposta vem como texto —
+    tentamos decodificar e cair no parser de CSV antigo nesse caso.
+    """
+    if content[:4] == _XLS_OLE2_MAGIC:
+        try:
+            return pd.read_excel(BytesIO(content), engine="xlrd")
+        except Exception as exc:  # noqa: BLE001
+            raise ServiceNowFetchError(f"Não consegui ler o Excel (.xls) de {url}: {exc}") from exc
+
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ServiceNowFetchError(
+            f"A resposta de {url} não é um .xls reconhecido (assinatura "
+            "OLE2) nem texto decodificável como CSV. Se a instância passou "
+            "a exportar .xlsx, é preciso instalar 'openpyxl' e ajustar "
+            "este parser."
+        ) from exc
+
+    return _parse_csv_text(text, url)
 
 
 def _parse_csv_text(text: str, url: str) -> pd.DataFrame:

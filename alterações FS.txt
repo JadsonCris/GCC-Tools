@@ -1,0 +1,1711 @@
+ALTERAÇÕES FS — 2026-08-03
+==========================
+
+Resumo do trabalho feito hoje no GCC-Tools (dashboard). Duas frentes:
+1) Paleta de cores de marca (tecnologia, prioridade, OK/NOK/Justificado)
+2) Filtros de período e geografia (data exata + Global/Ibéria/Brasil)
+
+
+1. PALETA DE CORES DE MARCA
+----------------------------
+
+Objetivo: aplicar as cores oficiais fornecidas (tabela "Cores por
+Tecnologia" e "Paleta de Prioridades") em todo o dashboard, substituindo
+as cores placeholder usadas até agora.
+
+Backend:
+- backend/services/keywords.py
+  - TOOL_COLORS atualizado com as 17 cores primárias por tecnologia
+    (AWS, Azure, Collect, Control-M, CRM-ML, CyberArk, Dynatrace, EAI-SAP,
+    Elastic, ITSI, NTP, OEM, OEM_BKP, SCOM, SolarWinds, Solman, SysGrid).
+  - Novo dicionário TOOL_COLORS_AI com as cores "AI/secundária" da mesma
+    tabela, usado na página AIOPER.
+- backend/services/dashboard_service.py
+  - PRIORITY_COLORS atualizado: High(P2)=#FAB138, Moderate(P3)=#F9E33B,
+    Low(P4)=#30ADDE.
+  - get_tools_breakdown() passou a aceitar um parâmetro opcional
+    `palette` (para poder usar TOOL_COLORS ou TOOL_COLORS_AI conforme o
+    contexto, sem duplicar a lógica de contagem).
+  - get_aioper_summary() passa agora TOOL_COLORS_AI para o gráfico de
+    ferramentas da página AIOPER.
+
+Frontend:
+- frontend/src/components/Cards/SlaCard.jsx
+  - subMetrics passou a aceitar cores hex diretas (ex: "#0FA811"), além
+    das classes Tailwind antigas — deteta automaticamente se o valor
+    começa por "#" e aplica via style inline.
+- Cores OK / NOK / Justificado (#0FA811 / #E21B23 / #FAB138) aplicadas em:
+  - SlaOverviewSection.jsx (cards SLA3 e SLA4)
+  - SlaDetailSection.jsx (números grandes "SLA Cumprido/Falhado/
+    Justificado" + gráficos de tendência de SLA2 e SLA3)
+  - Quality.jsx (Conforme/Inconforme)
+- SlaDetailSection.jsx: gráfico de tendência de prioridade e de SLA4
+  também atualizados para a nova paleta (Critical/P1, High/P2, Moderate/
+  P3, Low/P4).
+- PriorityBarChartMui / ToolsPieChartMui já herdam a cor diretamente do
+  backend, não precisaram de alteração.
+
+ASSUNÇÕES (por falta de dado explícito na tabela fornecida):
+- Cor de Critical/P1: não veio na tabela de prioridades (só P2/P3/P4
+  tinham cor). Usei a mesma cor de "NOK" (#E21B23), por ser a prioridade
+  mais crítica — se quiseres outra cor, é só dizer.
+- "Solman BR" vs "Solman PT": a tabela distinguia as duas, mas o gráfico
+  agrupa por "Keyword Found", que não separa região (só o campo "Source"
+  tem essa distinção, e não é usado em nenhum gráfico atual). Usei a cor
+  de "Solman BR" para as duas. Separar a sério implicaria mudar o
+  agrupamento dos gráficos de "Keyword Found" para "Source".
+
+
+2. FILTROS DE PERÍODO E GEOGRAFIA
+-----------------------------------
+
+Objetivo: melhorar o filtro de datas (permitir escolher um dia/período
+exato, não só arrastar o slider) e repor o filtro de geografia que
+existia no dashboard antigo (Global / Ibéria / Brasil).
+
+a) Datas exatas
+- frontend/src/components/Filters/DateRangeFilter.jsx
+  - Adicionados dois campos "De" / "Até" (input de data nativo do
+    browser — dá para escrever a data ou escolher no calendário),
+    sincronizados nos dois sentidos com o slider já existente.
+  - Presets (Hoje / Semana / Mês / Trimestre / Ano / Tudo) mantidos.
+
+b) Filtro de geografia
+- frontend/src/context/DateRangeContext.jsx
+  - Novo estado partilhado `region` (default "Global"), ao lado do
+    período `range` já existente — partilhado entre Visão Geral, Report
+    SLAs e AIOPER (mudar numa página muda nas outras).
+- frontend/src/components/Filters/DateRangeFilter.jsx
+  - Novo seletor (toggle buttons) Global / Ibéria / Brasil, ao lado dos
+    campos de data.
+- backend/services/transform.py
+  - Nova função filter_by_region(df, region): filtra um DataFrame bruto
+    (antes do enrich) por geografia, usando a mesma regra já existente
+    em add_region_column (Brasil se "BRASIL" está no campo "Parent",
+    senão Ibéria). "Global" ou vazio não filtra nada.
+- backend/services/history_service.py
+  - get_monthly_summary, get_range_summary, get_current_summary e
+    get_sla_trend passaram a aceitar um parâmetro `region` opcional,
+    aplicado ao "GCC Abertos" e ao "SLA3 (Incidentes)" antes de qualquer
+    cálculo (KPIs, prioridade, ferramentas, SLA1-4 tudo já sai filtrado).
+  - SLA4 (task_sla_list.do) não tem geografia própria no export — quando
+    há filtro de região ativo, restringe-se às tasks cujo número de
+    incidente já pertence à região filtrada (cruzamento por número).
+    Sem filtro (Global), o comportamento fica exatamente igual ao que já
+    existia.
+- backend/routers/dashboard.py
+  - Novo query param `region` em /dashboard/monthly, /dashboard/range e
+    /dashboard/sla-trend.
+- frontend/src/service/dashboardApi.js
+  - getMonthlySummary, getRangeSummary e getSlaTrend passaram a aceitar
+    e enviar `region` ao backend.
+- Páginas atualizadas para passar a região selecionada nas queries:
+  SlaOverviewSection.jsx, SlaDetailSection.jsx, AIOper.jsx.
+
+ASSUNÇÃO:
+- "Ibéria" continua a ser um bloco único (PT + ES) porque o dado bruto
+  (campo "Parent") só distingue Brasil do resto — não há como separar PT
+  de ES nesse campo. Se a app antiga separava mesmo os dois em algum
+  sítio, preciso de saber qual era a fonte desse dado.
+
+
+3. LIMITAÇÕES DESTA SESSÃO
+----------------------------
+- Não havia Python nem Node.js disponíveis no ambiente desta sessão,
+  por isso não foi possível correr o backend (TestClient) nem o
+  frontend para validação visual/funcional — todas as alterações foram
+  revistas manualmente por leitura do código.
+- Recomendado correr localmente antes de dar como fechado, em especial:
+  - o cruzamento de SLA4 por região (join por número de incidente);
+  - o novo filtro de datas (campos "De"/"Até" sincronizados com o
+    slider);
+  - o seletor de geografia nas 3 páginas (Visão Geral, Report SLAs,
+    AIOPER).
+
+
+ALTERAÇÕES FS — 2026-08-04
+==========================
+
+Âmbito combinado com o utilizador: só o ecossistema /services/* (Visão
+Geral, Report SLAs, Central Operacional, AIOPER, Qualidade) — as páginas
+antigas em /reports/* (Home, DashboardReports, CAB, Critical Incidents,
+Report P1, Report9Manha, AdvancedSla) ficaram de fora, por serem um
+ecossistema paralelo nunca tocado nesta migração (algumas usam endpoints
+já desativados, ex: backlog/despromovidos).
+
+Lista de pedidos original:
+- Geral: botão Light/Dark Mode no header; filtros globais de Período e
+  Região em todas as páginas/cards/tabelas/gráficos.
+- Visão Geral: percentagem em cada slice do pie "Falha de SLA por
+  Ferramenta"; valores visíveis por cima das colunas em "Incidentes por
+  Prioridade".
+- Report de SLAs: cards SLA Cumprido/Falhado/Justificado clicáveis (abrir
+  tabela de incidentes); remover "(mês a mês)" dos títulos; SLA1 em
+  minutos; SLA4 com "≤ 3"; eliminar cards SLA3/SLA4 por Região e SLA1/SLA2
+  por Prioridade; valores visíveis nos gráficos.
+
+
+1. VIEW "REPORT DE SLAS"
+--------------------------
+
+- frontend/src/components/Sections/SlaDetailSection.jsx
+  - Os 3 números agregados (SLA Cumprido/Falhado/Justificado) passaram a
+    ser botões clicáveis — abrem um modal com a tabela de incidentes por
+    trás do número (novo componente IncidentsStatusModal.jsx).
+  - Títulos dos painéis de tendência perderam o "(mês a mês)" (o
+    subtítulo de cada um já deixava isso claro).
+  - Painel SLA1 passou a usar minutos (campo novo `sla1_avg_minutes`) em
+    vez de segundos; subtítulo simplificado para "Meta: < 15 min".
+  - Painel SLA4: subtítulo corrigido para usar o símbolo "≤ 3" em vez de
+    "<= 3".
+  - Removidos os blocos "SLA3/SLA4 por Região" e "SLA1/SLA2 por
+    Prioridade" — e os componentes que só serviam a eles
+    (SlaRegionBreakdown.jsx, SlaPriorityBreakdown.jsx) foram apagados por
+    ficarem sem nenhum uso.
+- backend/services/quality_service.py
+  - Nova função get_incidents_by_sla_status(df, status): devolve a lista
+    de incidentes por trás de "ok"/"nok"/"justificados" (mesma definição
+    já usada em get_quality_metrics — Coluna==0/1 com evento, e
+    "Justificado?"=="sim").
+- backend/services/history_service.py
+  - Nova get_incidents_by_status(start, end, status, region): aplica o
+    mesmo filtro de intervalo+geografia dos outros endpoints de range e
+    devolve as linhas em vez de um resumo.
+- backend/routers/dashboard.py
+  - Novo endpoint GET /dashboard/incidents-by-status?status=ok|nok|
+    justificados&start=...&end=...&region=...
+- frontend/src/service/dashboardApi.js
+  - Nova getIncidentsByStatus(status, start, end, region).
+- backend/services/history_service.py: get_sla_trend ganhou o campo
+  `sla1_avg_minutes` (arredondado a 1 casa decimal) em cada mês, usado
+  pelo gráfico de SLA1.
+
+
+2. VIEW "VISÃO GERAL"
+-----------------------
+
+- frontend/src/components/Charts/ToolsPieChartMui.jsx
+  - Pie "Falha de SLA por Ferramenta" passou a mostrar a percentagem
+    dentro de cada slice (`arcLabel`), estilo MUI X "Titanic Survival
+    Statistics" — só em slices com pelo menos 20° (`arcLabelMinAngle`),
+    pra não amontoar texto em fatias muito pequenas.
+- frontend/src/components/Charts/PriorityBarChartMui.jsx
+  - Barras de "Incidentes por Prioridade" passaram a mostrar o valor por
+    cima de cada coluna (`barLabel="value"`) — usado também na Central
+    Operacional, que reaproveita o mesmo componente.
+- frontend/src/components/Charts/TrendChart.jsx
+  - Gráficos de barra do Report SLAs (SLA2, SLA3, SLA4, Prioridade)
+    também passaram a mostrar o valor por cima da coluna.
+  - LIMITAÇÃO: os gráficos de linha (SLA1, Com Evento vs Sem Evento) NÃO
+    têm um equivalente oficial de "barLabel" no MUI X Charts Community
+    pra rótulos sempre visíveis em cada ponto — só ficou disponível via
+    tooltip ao passar o rato (já ativo por padrão). Fazer isso persistir
+    sem hover exigiria um componente customizado que não dava pra validar
+    sem conseguir correr a app nesta sessão — fica como próximo passo se
+    for mesmo necessário.
+
+
+3. FILTROS GLOBAIS (PERÍODO + REGIÃO) EM TODAS AS PÁGINAS
+-------------------------------------------------------------
+
+- frontend/src/pages/Quality.jsx
+  - Deixou de usar o endpoint "atual" (/analytics/quality, sem filtro) e
+    passou a usar getRangeSummary(start, end, region), como as outras
+    páginas — ganhou o <DateRangeFilter /> (Período + Região) no topo.
+- frontend/src/pages/CentralOperacional.jsx
+  - Mesma mudança: trocou 4 pedidos separados "atuais" (incidentes,
+    ferramentas, qualidade, operadores) por um único getRangeSummary
+    filtrado, e ganhou o <DateRangeFilter />.
+  - O modal de detalhe de operador (clicar numa linha da tabela) também
+    passou a respeitar o período/região selecionados.
+- backend/routers/operators.py + services/history_service.py
+  - GET /operators/{tecnico} e get_enriched_gcc_abertos/_range ganharam
+    parâmetro `region`, pro modal de detalhe do operador poder filtrar
+    por geografia também (antes só filtrava por mês/intervalo).
+- frontend/src/service/dashboardApi.js
+  - getOperatorDetail(tecnico, start, end, region) atualizado.
+- Sidebar (MainLayout.jsx): adicionado o link "Qualidade" que faltava (a
+  página existia e tinha rota, mas não tinha entrada no menu).
+
+
+4. LIGHT/DARK MODE
+---------------------
+
+- frontend/tailwind.config.js: `darkMode: "class"` (estratégia baseada em
+  classe "dark" na tag <html>, não na preferência do SO).
+- frontend/src/context/ThemeContext.jsx (novo): ColorModeProvider +
+  useColorMode() — estado partilhado por toda a app, persistido em
+  localStorage (chave "gcc-theme"), default "dark" pra não mudar o
+  visual de quem já usa a app.
+- frontend/src/main.jsx: novo MuiThemeBridge — o tema do MUI (usado pelos
+  gráficos MUI X, TextField, ToggleButtonGroup do filtro de datas) segue
+  o mesmo modo claro/escuro escolhido no botão, em vez de ficar preso a
+  "dark" sempre.
+- frontend/src/layouts/MainLayout.jsx: botão de alternância (ícone
+  sol/lua) no header; sidebar/header/main convertidos pra usar
+  `dark:`/claro conforme o tema.
+- Convertidos pra suportar os dois modos (classes `dark:` + cores MUI
+  relativas ao tema, em vez de hex fixos): DateRangeFilter.jsx,
+  SlaCard.jsx, KPICard.jsx, OperatorsTable.jsx, SemEventoTable.jsx,
+  IncidentsStatusModal.jsx (novo), GrupoSplitBar.jsx, PriorityChart.jsx,
+  ToolChart.jsx, TrendChart.jsx, PriorityBarChartMui.jsx,
+  ToolsPieChartMui.jsx, e as 5 páginas de /services (DashboardServices
+  via SlaOverviewSection, SLA via SlaDetailSection, CentralOperacional,
+  AIOper, Quality).
+- frontend/src/styles/globals.css: cor de fundo/texto do <body> também
+  ficou condicional ao tema (antes era sempre escuro fixo).
+
+ÂMBITO NÃO COBERTO (confirmado com o utilizador antes de começar):
+- Páginas de /reports/* (Home, DashboardReports, CAB, CriticalIncidents,
+  Reports1/ReportP1, ReportPt/Report9Manha) e AdvancedSla.jsx continuam
+  só em modo escuro — não fazem parte do ecossistema /services/* migrado
+  esta sessão.
+
+
+5. LIMITAÇÕES DESTA SESSÃO
+------------------------------
+- Mesma limitação de sempre: sem Python nem Node.js disponíveis neste
+  ambiente, não foi possível correr o backend nem o frontend — tudo
+  revisto manualmente por leitura do código, sem confirmação visual.
+- Recomendado testar em especial:
+  - o botão Light/Dark (alternar várias vezes, verificar contraste em
+    todos os cards/tabelas/gráficos das 5 páginas);
+  - os gráficos MUI X em modo claro (arcLabel do pie, barLabel das
+    barras, eixos/legendas);
+  - o novo modal de incidentes por status SLA (cards clicáveis no Report
+    SLAs);
+  - Quality.jsx e CentralOperacional.jsx com o filtro de período/região
+    aplicado (comportamento mudou de "sempre mês atual" pra "respeita o
+    filtro").
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação, mesmo dia)
+=========================================================
+
+Pedido: legenda (descrição de cada coluna/slice) por baixo do gráfico em
+vez de por cima, em todos os gráficos MUI X; correção de um erro visual
+apontado no modo escuro; suavizar a diferença de cor entre modo claro e
+escuro.
+
+1. LEGENDA POR BAIXO DOS GRÁFICOS
+------------------------------------
+- frontend/src/components/Charts/TrendChart.jsx: legenda movida para
+  baixo (`slotProps.legend.position = { vertical: "bottom", horizontal:
+  "middle" }`) — afeta os 6 painéis do Report SLAs.
+- frontend/src/components/Charts/ToolsPieChartMui.jsx: legenda movida de
+  lateral-direita pra baixo, na horizontal.
+- frontend/src/components/Charts/PriorityBarChartMui.jsx: NÃO ganhou
+  legenda — cada barra já mostra a sua descrição (Critical/High/
+  Moderate/Low) diretamente por baixo dela via o próprio eixo X, o que já
+  cobre o pedido sem duplicar informação.
+
+2. GLITCH NO EIXO ("000000") — SLA4 em modo escuro
+------------------------------------------------------
+- Causa: quando todos os valores do período são 0 (ex: SLA4 sem quebras),
+  o MUI X calcula uma escala de eixo degenerada (min=max=0) e chega a
+  desenhar vários ticks "0" sobrepostos — mais os rótulos de valor de
+  cada barra (`barLabel`), também "0", sobrepostos no mesmo ponto. Some
+  tudo isso no mesmo pixel e lê-se "000000".
+- Corrigido em TrendChart.jsx e PriorityBarChartMui.jsx:
+  - Eixo Y ganha um teto mínimo (`max: 1`) só quando TODOS os valores do
+    gráfico são zero — evita a escala degenerada sem alterar o
+    comportamento quando há dados reais.
+  - `barLabel` passou a devolver string vazia para valores 0 (não mostra
+    "0" repetido em cada barra vazia).
+
+3. PALETA CLARA MAIS SUAVE (menos contraste entre light/dark)
+-------------------------------------------------------------------
+- Fundo de página (MainLayout, body): de branco/quase-branco pra
+  slate-100 (#f1f5f9) — mais próximo em "peso visual" do fundo escuro
+  (slate-950) do que um branco puro.
+- Texto principal: de slate-900 (quase preto) pra slate-800 — menos
+  contraste extremo, mais parecido com o branco suave (slate-100) usado
+  no texto do modo escuro.
+- Cards/painéis mantidos em branco puro (elevados sobre o fundo
+  slate-100), senão perdiam toda a hierarquia visual contra a página.
+- Aplicado de forma consistente com `sed` em todos os ficheiros já
+  convertidos pro tema (mesmas classes `bg-white dark:bg-slate-900`,
+  `text-slate-900 dark:text-white`, `bg-slate-50 dark:bg-slate-950`,
+  `border-slate-200 dark:border-slate-800`, reescritas em massa).
+
+4. REVISÃO DO CÓDIGO DE LIGHT/DARK MODE
+-------------------------------------------
+Revi o ColorModeProvider (context/ThemeContext.jsx), a ponte com o tema
+MUI (main.jsx) e o botão no header (MainLayout.jsx) — estruturalmente
+não encontrei nenhum bug (o toggle troca a classe "dark" na tag <html>,
+Tailwind está configurado com `darkMode: "class"`, e todas as classes
+`dark:` usadas são strings estáticas, então o Tailwind consegue
+detetá-las na build). Não consegui reproduzir visualmente o erro
+específico do modo escuro sem conseguir correr a app — ver nota abaixo.
+
+ATUALIZAÇÃO (mesmo dia, depois de ver a imagem "img 3 - tudo mal"):
+o bug real era na página "/" (Home.jsx) — fica FORA do MainLayout (sem
+sidebar, sem tema, renderizada direto pela rota "/") e nunca tinha
+background próprio: dependia do <body> estar sempre escuro por padrão.
+Isso deixou de ser verdade quando o <body> passou a seguir o tema (ver
+globals.css) — resultado: fundo da página claro, mas o texto ("Claranet
+GCC Service Dashboard") continuava com a classe fixa `text-white`,
+ilegível, com os cards ainda escuros por baixo. Corrigido dando à
+Home.jsx o seu próprio fundo escuro fixo (`min-h-screen bg-slate-950
+text-slate-100`), independente do tema — consistente com a decisão de
+âmbito já tomada (só /services/* participa do light/dark mode; Home.jsx
+e /reports/* continuam sempre escuros). As páginas /reports/* não
+tinham este problema porque o ReportsLayout.jsx já tinha o seu próprio
+fundo fixo (`bg-slate-950 text-white`) no contentor raiz.
+
+ATUALIZAÇÃO 2 (mesmo dia): depois de reiniciar o `npm run dev`, o toggle
+Light/Dark passou a funcionar (era mesmo o servidor preso na estratégia
+antiga do Tailwind, `media`, em vez de `class` — não era bug de código).
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 2, mesmo dia)
+============================================================
+
+Dois problemas reportados já com o dev server reiniciado e o tema a
+funcionar:
+1) Espaçamento entre o gráfico e a legenda (em baixo) muito apertado,
+   quase a tocar nos rótulos do eixo X.
+2) Os valores por cima das colunas (barLabel) tinham desaparecido de
+   TODOS os gráficos de barra — regressão introduzida na correção
+   anterior do glitch "000000".
+
+Causa da regressão: pra esconder rótulos "0" repetidos (o que causava o
+"000000"), troquei `barLabel: "value"` (string, modo documentado/
+estável do MUI X) por uma função `(item) => item.value ? ... : ""`. Essa
+função quebrou a renderização de TODOS os rótulos, não só os zero —
+mesmo barras com 1962, 2500 incidentes deixaram de mostrar o número.
+
+Corrigido em TrendChart.jsx e PriorityBarChartMui.jsx:
+- `barLabel` voltou a "value" (string) em vez da função — o glitch do
+  "000000" já fica resolvido só com o teto mínimo do eixo Y
+  (`yAxisExtra`/`max: 1` quando tudo é zero), que continua ativo; não
+  precisava da função pra isso.
+- TrendChart.jsx: `height` aumentado de 260 para 300, `margin={{ bottom:
+  56 }}` e `slotProps.legend.padding = { top: 16 }` adicionados, pra dar
+  respiro entre o eixo X e a legenda por baixo.
+
+LIMITAÇÃO: não consegui ver o resultado renderizado (sem Node.js nesta
+sessão) — o ajuste de espaçamento é uma estimativa razoável, pode
+precisar de mais um ajuste fino depois de veres como ficou.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 3, mesmo dia)
+============================================================
+
+CAUSA REAL encontrada (com Node.js já disponível nesta sessão, dá pra
+inspecionar os tipos do @mui/x-charts instalado em vez de adivinhar):
+
+`barLabel` é uma prop do PRÓPRIO `<BarChart>` (nível do gráfico, aplica-
+-se a todas as barras de uma vez) — NÃO um campo de cada item dentro de
+`series[]`. Estava a defini-lo dentro de cada série
+(`series={[{ dataKey, barLabel: "value" }]}`), onde é só uma propriedade
+extra ignorada — por isso nunca aparecia nada, e só o tooltip do rato
+(mecanismo completamente à parte) continuava a mostrar o valor.
+
+Corrigido:
+- frontend/src/components/Charts/TrendChart.jsx: `barLabel="value"`
+  movido pra fora do `.map()` das séries, pra prop direta do `<Chart>`
+  (só quando `type === "bar"`).
+- frontend/src/components/Charts/PriorityBarChartMui.jsx: mesma
+  correção — `barLabel="value"` como prop do `<BarChart>`.
+- Confirmado com `grep` nos `.d.ts` do pacote instalado
+  (node_modules/@mui/x-charts) que `arcLabel`/`arcLabelMinAngle` do
+  ToolsPieChartMui.jsx ESTAVAM certos desde o início (esses sim são
+  campos válidos de cada série de pie chart) — por isso as percentagens
+  nas fatias já funcionavam.
+- ToolsPieChartMui.jsx: legenda voltou pro lado direito (revertida a
+  mudança pra baixo de uma iteração anterior).
+
+Desta vez consegui validar com `npx eslint` nos ficheiros tocados (0
+erros) e correr `npm run build` — Node.js passou a estar disponível
+nesta sessão a meio do dia, ao contrário do resto do dia.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 4, mesmo dia)
+============================================================
+
+Pedido: o valor por cima da barra (já a funcionar, centrado dentro
+dela) devia ficar no TOPO da barra, não no meio — como no exemplo do
+dashboard antigo (Power BI).
+
+Investigação (com Node.js disponível, fui direto ao código-fonte
+instalado em vez de adivinhar): o `barLabel` embutido do MUI X Charts
+não tem NENHUMA opção de posição — confirmado em
+BarChart/BarLabel/BarLabelPlot.js que a coordenada é sempre calculada
+como o centro exato da barra (`x + width/2, y + height/2`), sem prop
+pública pra mudar isso. Perguntei ao utilizador se queria mesmo assim
+avançar sabendo que não consigo testar visualmente o alinhamento —
+respondeu que sim.
+
+Solução: nova função de rótulos, independente do `barLabel` embutido.
+- frontend/src/components/Charts/BarValueLabels.jsx (novo): recebe os
+  mesmos `data`/`series` já passados ao gráfico e desenha o próprio
+  `<text>` SVG por cima de cada barra, usando os hooks públicos
+  `useXScale`/`useYScale` (@mui/x-charts/hooks) pra saber a posição em
+  pixel de cada categoria/valor.
+  - Pra gráficos com várias séries lado a lado (SLA2 OK/NOK, Prioridade
+    com 4 cores), reproduz a MESMA fórmula que o MUI X usa por dentro
+    pra dividir o espaço entre barras do mesmo grupo (função
+    `getBandSize` em BarChart/BarPlot.js, com o `barGapRatio` default
+    de 0.1 — confirmado em internals/computeAxisValue.js), pra alinhar
+    com precisão em vez de aproximar.
+  - Esconde o rótulo quando o valor é 0 (evita o mesmo tipo de ruído
+    visual do glitch "000000" de antes).
+- TrendChart.jsx / PriorityBarChartMui.jsx: `barLabel="value"` removido
+  (era o embutido, sempre centrado); passam agora `<BarValueLabels>`
+  como `children` do `<BarChart>`.
+- Eixo Y ganhou 15% de folga acima do valor máximo (`max: maxValue *
+  1.15`) — sem isso a barra mais alta encostava no topo do gráfico e o
+  rótulo, agora desenhado por cima da barra em vez de dentro, ficava
+  cortado.
+
+Validação: `npx eslint` (0 erros) e `npm run build` (sucesso, 3340
+módulos, sem warnings novos) nos ficheiros tocados. Isto confirma que o
+código compila e os imports resolvem — NÃO confirma visualmente que o
+alinhamento pixel-a-pixel está perfeito (não há como abrir um browser
+nesta sessão). A fórmula de posicionamento foi copiada diretamente do
+código-fonte da biblioteca instalada (não adivinhada), por isso a
+confiança é alta, mas vale a pena confirmar visualmente antes de dar
+como fechado — principalmente nos gráficos com 4 séries (Incidentes por
+Prioridade).
+
+CONFIRMADO PELO UTILIZADOR: funcionou — screenshot mostra os valores
+corretamente alinhados por cima de cada barra em todos os 5 gráficos de
+barra, incluindo o de 4 séries (Incidentes por Prioridade). A fórmula
+copiada do código-fonte estava certa.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 5, mesmo dia)
+============================================================
+
+Pedido: mesma coisa (valor sempre visível, por cima do ponto) agora nos
+gráficos de LINHA (SLA1, Com Evento vs Sem Evento) — até agora só
+tinham tooltip ao passar o rato.
+
+- frontend/src/components/Charts/LineValueLabels.jsx (novo): mesma
+  ideia do BarValueLabels.jsx, mas mais simples — o eixo X de uma
+  LineChart usa escala "point" (não "band"), que já devolve a posição
+  exata de cada ponto diretamente, sem precisar repartir espaço entre
+  séries vizinhas (isso só existe em barras agrupadas). Cor do texto
+  segue a cor da própria linha (`s.color`), não uma cor neutra — fica
+  mais fácil de ligar cada número à série certa quando há 2 linhas no
+  mesmo gráfico (Com Evento vs Sem Evento).
+- TrendChart.jsx: passa `<LineValueLabels>` como `children` quando
+  `type !== "bar"` (mesma folga de eixo Y de 15% já aplicada a ambos os
+  tipos, então já não precisou de ajuste extra).
+
+Validação: `npx eslint` (0 erros) e `npm run build` (sucesso) — mesma
+ressalva de sempre, não há como confirmar visualmente o alinhamento
+sem browser, mas a lógica é mais simples que a das barras (sem fórmula
+de agrupamento a replicar), por isso o risco é menor.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 6, mesmo dia) — JUSTIFICAÇÕES
+================================================================================
+
+NOTA IMPORTANTE: pela primeira vez nesta sessão, Python + pandas +
+openpyxl + o venv do projeto (com todas as dependências do
+requirements.txt) ficaram disponíveis. Isto mudou a forma de trabalhar
+nesta parte: em vez de só ler código e documentar assunções, consegui
+correr o backend a sério — abrir o ficheiro real de Justificações com
+pandas, gravar na BD real (dashboard.db, a mesma que a app usa, só a
+tabela nova "justificacoes" foi tocada) e validar cada função com
+`TestClient` contra dados reais e históricos (4 meses, milhares de
+incidentes). Isto dá muito mais confiança do que as sessões anteriores,
+onde só dava pra rever o código.
+
+Pedido: os incidentes identificados na tabela de Justificações (SharePoint,
+JUSTIFICACOES_URL) devem deixar de contar como quebra de SLA e passar a
+"justificados" — mostrados no card Justificado do Report SLAs com a sua
+justificação. Além disso: SLA1 com 2 linhas (com/sem justificações),
+SLA2 com barra extra de justificados + linha de referência a 10% do
+total, SLA3 igual mas a 30%.
+
+
+1. LIGAÇÃO À TABELA DE JUSTIFICAÇÕES (SharePoint)
+------------------------------------------------------
+
+Descoberta ao investigar: o parâmetro `justificacoes` de
+`enrich_sys_report_template()` já existia no código (criado nalguma
+sessão anterior) mas NUNCA era passado por nenhum sítio que o chamava —
+"Justificado?" ficava sempre "não" pra todo o mundo, e a tabela em si
+nunca era sequer descarregada/gravada na BD. Corrigido de ponta a ponta:
+
+- backend/config.py: nova `SN_FILENAME_JUSTIFICACOES` (default
+  "JUSTIFICACOES_URL.xlsm").
+- backend/cache.py:
+  - JUSTIFICACOES_URL é SharePoint, não ServiceNow — as credenciais
+    SN_USER/SN_PASS não servem pra autenticar lá. Por isso a tabela
+    "justificacoes" tem URL de busca automática sempre `None`
+    (SERVICENOW_URLS) — vai direto pro download manual em downloads/,
+    igual ao que já acontecia com as tabelas desativadas.
+  - `_read_csv_file()` ganhou suporte a `.xlsm` (mesmo motor que
+    `.xlsx`, openpyxl) e um parâmetro `sheet_name` — o ficheiro real
+    (confirmado abrindo backend/downloads/JUSTIFICACOES_URL.xlsm) tem 5
+    sheets ('ACN (Brasil)', 'Minsait (Brasil)', 'SLA Mês Passado', 'SLA
+    Mês Atual', 'Justificações') — só a última interessa, e sem
+    `sheet_name` o pandas lia sempre a primeira (errada).
+  - Nova `_save_justificacoes_table()`: grava por SUBSTITUIÇÃO total
+    (`to_sql(if_exists="replace")`), não incremental como as outras 5
+    tabelas — esta planilha não "purga" com o tempo como o ServiceNow
+    (é mantida manualmente), então não existe conceito de "backlog"
+    aqui. Também não dava pra fazer UPSERT mesmo que quiséssemos: a
+    chave natural (Incidente + Aceite?) tem 19 duplicados genuínos nos
+    dados reais.
+  - Testado com o ficheiro real: 4313 linhas lidas e gravadas
+    corretamente na dashboard.db (só a tabela nova, as outras 11
+    tabelas existentes não foram tocadas).
+
+Schema real confirmado (Incidente | texto | Aceite?):
+  - "Incidente": tem tabs/espaços/nbsp à volta em várias linhas
+    (limpo com `.str.strip()`).
+  - "texto": a justificação em si, texto livre.
+  - "Aceite?": qual(is) SLA(s) aquela linha justifica — valores reais
+    encontrados: "SLA1", "SLA2", "SLA3", "SLA4", "SLA1, SLA2" (várias)
+    e "Despromoção" (mapeado pra SLA4 — mesmo conceito de "P1
+    despromovido" que o SLA4 desta app já usa). Linhas com "Aceite?"
+    vazio (ainda não avaliadas pela equipa) NÃO contam como
+    justificadas.
+  - Um mesmo incidente pode ter várias linhas — uma por SLA/motivo
+    diferente (ex: INC3311534 tem uma linha "SLA3" e outra
+    "Despromoção", com textos diferentes).
+
+- backend/services/justificacoes_service.py (novo): `parse_justificacoes()`
+  normaliza a tabela bruta e extrai quais SLAs (1-4) cada linha cobre;
+  `get_justified_map(df_parsed, sla)` devolve {Incidente: texto} só pra
+  quem justifica aquele SLA específico. Testado contra os dados reais:
+  3171 incidentes justificados pra SLA1, 3109 pra SLA2, 122 pra SLA3,
+  600 pra SLA4 (via "Despromoção").
+
+
+2. "NÃO CONTAR O SLA REFERIDO" — OK/NOK/JUSTIFICADO MUTUAMENTE EXCLUSIVOS
+------------------------------------------------------------------------------
+
+- backend/services/transform.py: `enrich_sys_report_template()` agora
+  recebe a tabela bruta de justificações e gera colunas SEPARADAS por
+  SLA: "Justificado SLA1", "Justificado SLA2" (+ "Justificado?" mantido
+  como OU dos dois, por compatibilidade) e "Justificacao Texto".
+- backend/services/quality_service.py: `get_quality_metrics()`
+  reescrito — antes "justificados" era uma contagem à parte que podia
+  sobrepor OK ou NOK (mas como o parâmetro nunca chegava preenchido,
+  dava sempre 0 na prática). Agora um incidente que seria NOK
+  (Coluna==1) mas tem justificação aceite pra SLA2 sai de "nok_count" e
+  entra em "justificados" — "não conta o SLA referido na tabela", como
+  pedido. OK fica OK independente de ter linha na tabela (não havia
+  problema nenhum a desculpar). Isto alimenta ao mesmo tempo os 3 cards
+  do topo do Report SLAs (Cumprido/Falhado/Justificado) E as barras do
+  gráfico de tendência do SLA2 (mesma fonte de dados).
+  - `get_incidents_by_sla_status()`: mesma lógica mutuamente exclusiva
+    — o card "Justificado" agora mostra exatamente os incidentes que
+    saíram do NOK por causa da justificação, com a coluna
+    "Justificacao Texto" incluída na resposta (campo `justificacao` no
+    JSON, novo).
+- backend/services/sla_service.py: `get_sla3_summary()` ganhou o mesmo
+  tratamento — P1s "not_achieved" com justificação aceite pra SLA3 saem
+  de "not_achieved" e entram em "justificados". `sla3_pct` continua a
+  ser o número BRUTO (achieved/total), sem ajuste — mesmo critério do
+  SLA2 (justificação não infla a percentagem, só reclassifica a barra).
+
+Testado contra dados reais (4 meses): SLA2 justificados por mês = 7,
+49, 4, 0 — números pequenos e plausíveis frente aos totais (600-2600
+incidentes/mês). SLA1 "com justificações" sempre menor que "sem" (ex:
+junho: 19.3min sem vs 8.9min com) — confirma que remover os incidentes
+justificados (eventos com "first occurrence" claramente errada) limpa a
+média, como esperado.
+
+
+3. SLA1 COM 2 LINHAS
+------------------------
+
+- backend/services/dashboard_service.py: `get_sla1_sla2()` ganhou
+  "avg_seconds_justificado"/"avg_time_justificado" — a mesma média de
+  SLA1, mas excluindo incidentes com justificação aceite pra SLA1. A
+  ideia (confirmada com os dados reais): um evento com "first
+  occurrence" atrasada/errada não deve inflacionar a média real de
+  escalonamento — removê-lo dá o número "limpo".
+- Frontend (SlaDetailSection.jsx): painel SLA1 agora com 2 séries —
+  "Sem Justificações" (vermelho, bruto) e "Com Justificações" (verde,
+  sem os justificados) — mesmo estilo do dashboard antigo mostrado na
+  imagem de referência.
+
+
+4. SLA2/SLA3 COM BARRA DE JUSTIFICADOS + LINHA DE THRESHOLD
+------------------------------------------------------------------
+
+- backend: `get_sla_trend()` ganhou `sla2_justificados`+
+  `sla2_threshold_count` (10% do total de incidentes com evento do mês)
+  e `sla3_justificados`+`sla3_threshold_count` (30% do total de P1s do
+  mês) — ambos calculados mês a mês, variam com o total de cada mês
+  (não é uma linha fixa).
+- frontend/src/components/Charts/ThresholdTrendLine.jsx (novo): como o
+  threshold muda mês a mês, não é uma linha horizontal fixa — desenha
+  um polyline ligando o valor de threshold de cada mês, com os mesmos
+  hooks públicos (useXScale/useYScale) já usados em BarValueLabels.jsx/
+  LineValueLabels.jsx. Não existe "linha de referência" nativa no MUI X
+  Charts pra isto.
+- TrendChart.jsx: novo prop opcional `thresholdKey` — quando presente
+  (só nos gráficos de barra), desenha a ThresholdTrendLine por cima; o
+  cálculo de folga do eixo Y (15%) passou a incluir o valor do
+  threshold, pra a linha nunca ficar cortada no topo.
+- SlaDetailSection.jsx: painéis SLA2 e SLA3 ganharam a 3ª série
+  "Justificados" (laranja) e `thresholdKey` (10%/30% respetivamente).
+
+
+5. VALIDAÇÃO END-TO-END COM DADOS REAIS
+--------------------------------------------
+
+Com Python disponível pela primeira vez nesta sessão, testei a cadeia
+INTEIRA (não só sintaxe): `history_service.get_sla_trend()` e
+`get_range_summary()` direto contra a dashboard.db real, e depois os
+endpoints HTTP reais via `TestClient` (`/api/dashboard/sla-trend`,
+`/api/dashboard/incidents-by-status`, `/api/dashboard/range`) — todos
+200 OK, números coerentes entre si (ex: sla2_justificados do trend bate
+com o total de incidentes devolvidos por /incidents-by-status pro mesmo
+mês). Corri também um smoke test nos endpoints que NÃO deviam ter
+mudado (monthly, bounds, months, operators, quality, sem-evento) — tudo
+continua 200 OK, sem regressão.
+
+Frontend: `npx eslint` (0 erros) e `npm run build` (sucesso) nos
+ficheiros novos/tocados — mas isto só confirma que compila, não
+substitui ver renderizado num browser real (sem Node com display
+gráfico nesta sessão). Vale a pena confirmar visualmente, principalmente:
+- a linha de threshold tracejada (ThresholdTrendLine) — é um componente
+  novo, nunca visto renderizado;
+- os textos de justificação no modal (podem ser longos — truncados com
+  `max-w-sm` + `title` no hover pro texto completo).
+
+ASSUNÇÕES:
+- "Justificado" (card + SLA2) só considera "Aceite?" com SLA1 ou SLA2 —
+  é o que já fazia sentido com a definição existente de "Coluna"
+  (OK/NOK, que É a métrica de SLA1/SLA2). SLA3 tem a sua própria lógica
+  de justificação, separada (não passa pelo card do topo).
+- Linhas com "Aceite?" vazio (não avaliadas) NÃO contam como
+  justificadas — só "Aceite?" preenchido é tratado como aprovado. Se a
+  equipa quiser distinguir "pendente" de "rejeitado", a coluna bruta
+  "Aceite?" já está gravada na BD, dá pra refinar depois.
+- SLA4 ("Despromoção", 600 incidentes na tabela) NÃO foi alterado nesta
+  ronda — só SLA1/2/3 foram pedidos explicitamente. A infraestrutura
+  (get_justified_map(parsed, 4)) já existe pronta pra quando for pedido.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 7, mesmo dia) — CENTRAL OPERACIONAL
+================================================================================
+
+Pedido: duas tabelas novas na Central Operacional — (1) quantidade de
+incidentes abertos por Source, dia a dia (réplica de uma tabela do
+dashboard antigo); (2) incidentes abertos + tags "OK" feitas por cada
+membro da equipa, com um mapa Utilizador->Nome passado pelo utilizador
+(a tabela "ok_"/TAG OK usa o username curto do ServiceNow, ex:
+"EX132427", não o nome completo usado no resto da app).
+
+1. TABELA "INCIDENTES POR FONTE E DIA"
+-------------------------------------------
+- backend/services/dashboard_service.py: nova `get_source_by_day(df)` —
+  pivot Source (linha) x dia de abertura (coluna) -> contagem. Usa
+  "Source" (não "Keyword Found"): é a coluna que já distingue região pra
+  OEM/SOLMAN ("OEM BR" vs "OEM PT"), que é o que a imagem de referência
+  mostrava. Incidentes sem Source (Grupo=="Monitorização") ficam de
+  fora.
+- frontend/src/components/Tables/SourceByDayTable.jsx (novo): tabela
+  com scroll horizontal, coluna "Source" fixa (sticky) e cabeçalho de 2
+  linhas (mês a agrupar os dias + dia do mês), réplica visual da imagem
+  de referência. Linha e coluna de Total.
+- Testado com dados reais: junho/2026 tem 30 dias x 14 sources, total
+  2028 (bate com o total de incidentes com evento do mês, já validado
+  na sessão de Justificações).
+
+2. TABELA "ATIVIDADE DA EQUIPA" (Incidentes Abertos + Tags OK)
+--------------------------------------------------------------------
+- backend/services/team_service.py (novo):
+  - `USUARIOS`: mapa Utilizador (username curto, ex: "EX132427") ->
+    Nome completo, passado diretamente pelo utilizador (18 entradas,
+    não vem de nenhum export automatizado).
+  - `username_to_tecnico()`: "EX132427" -> "André Fernandes Claranet"
+    — o mesmo formato usado em "Opened by"/"Técnico" no resto da app.
+    Confirmado nos dados reais: os 18 usernames da tabela "ok_" (TAG
+    OK) batem exatamente com os 18 usernames que o utilizador passou.
+  - `get_team_activity()`: por técnico, nº de incidentes abertos
+    (coluna "Técnico" do principal já filtrado) + nº de tags "OK_GCC"
+    feitas (tabela "ok_", coluna "Created by" traduzida via
+    `username_to_tecnico`).
+  - `filter_ok_by_incident_set()`: a tabela "ok_" não tem região/
+    técnicos-ocultos própria — pra respeitar o filtro de
+    período+região+técnicos ocultos já aplicado ao principal, restringe
+    "ok_" aos incidentes cujo número (extraído de "Title", ex:
+    "Incident - INC0030238") já sobreviveu a esse filtro.
+- backend/services/history_service.py: `get_monthly_summary`/
+  `get_range_summary` passaram a ler+filtrar a tabela "ok_" (coluna
+  "Created", mesmo período) e chamar `_compute_team_activity()`.
+- frontend/src/components/Tables/TeamActivityTable.jsx (novo): tabela
+  simples Técnico | Incidentes Abertos | Tags OK (verde).
+- Testado com dados reais: junho/2026, 17 técnicos, ex: "Diogo Mendes
+  Claranet" — 245 incidentes abertos, 325 tags OK (plausível: tags OK
+  não são só auto-atribuídas, um técnico pode validar incidentes
+  abertos por outros).
+
+3. LIGAÇÃO NA CENTRAL OPERACIONAL
+--------------------------------------
+- frontend/src/pages/CentralOperacional.jsx: as duas tabelas novas
+  ligadas ao mesmo `summary` (getRangeSummary) já usado pelo resto da
+  página — não precisou de nenhum pedido extra ao backend, só consumir
+  os dois campos novos (`source_by_day`, `team_activity`) que já vêm no
+  payload existente.
+
+VALIDAÇÃO: testado end-to-end com `TestClient` contra a dashboard.db
+real (`/api/dashboard/range`, payload de junho/2026 com as duas tabelas
+= 16.4KB, tamanho razoável). Smoke test nos endpoints que não deviam
+mudar — tudo 200 OK. Frontend: `npx eslint` (0 erros) e `npm run build`
+(sucesso).
+
+ASSUNÇÕES:
+- Usernames da tabela "ok_" sem entrada em `USUARIOS` são devolvidos
+  tal como vieram (ex: "EX999999"), em vez de desaparecer da tabela —
+  pra não perder o dado se a equipa mudar/crescer sem eu saber.
+- "Tags OK" conta só `Label == "OK_GCC"` (único valor visto nos dados
+  reais — 5273 de 5273 linhas).
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 8, mesmo dia)
+============================================================
+
+Pedido: remover o bloco "Escala de Operadores" da Central Operacional
+(ficou redundante com a nova tabela "Atividade da Equipa"); eliminar a
+view "Qualidade" por completo.
+
+1. "ESCALA DE OPERADORES" REMOVIDA DA CENTRAL OPERACIONAL
+----------------------------------------------------------------
+- frontend/src/pages/CentralOperacional.jsx: removido o bloco inteiro
+  (tabela + modal de detalhe do operador ao clicar numa linha) — junto
+  os imports que só serviam pra isso (`useState`, `getOperatorDetail`,
+  `OperatorsTable`, `PriorityChart`, `ToolChart`, `X` do lucide-react) e
+  as variáveis derivadas (`agents`, `loadingAgents`, `isAgentsError`,
+  `selectedOperator`).
+- NÃO apaguei o endpoint `/operators/{tecnico}` nem `getOperatorDetail()`
+  no backend/dashboardApi.js — só a UI que os usava desapareceu; a
+  funcionalidade em si continua a funcionar caso seja pedida de volta
+  nalgum sítio.
+- `OperatorsTable.jsx` (o componente) NÃO foi apagado — continua a ser
+  usado na Visão Geral ("Técnicos — Incidentes e Não Conformidades").
+
+2. VIEW "QUALIDADE" ELIMINADA
+-----------------------------------
+- frontend/src/pages/Quality.jsx: ficheiro apagado.
+- frontend/src/App.jsx: rota "/services/quality" removida.
+- frontend/src/layouts/MainLayout.jsx: link "Qualidade" removido da
+  sidebar (tinha sido adicionado numa sessão anterior por estar em falta
+  no menu, apesar da rota já existir).
+- `getQualityMetrics()` (dashboardApi.js) e o endpoint `/analytics/
+  quality` (backend) ficaram sem nenhum consumidor no frontend, mas não
+  foram apagados — o endpoint continua funcional caso seja preciso de
+  novo.
+
+Validação: `npx eslint` (0 erros) e `npm run build` (sucesso) — bónus:
+o bundle ficou ~270KB mais leve (806KB vs 1074KB antes), porque a
+Quality.jsx era o único consumidor de `recharts` no ecossistema
+/services/* (as outras páginas já usam só MUI X Charts).
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 9, mesmo dia) — GESTÃO DE TURNOS
+================================================================================
+
+Pedido: portar a ferramenta HTML standalone "Gestão de Turnos MOD"
+(localStorage, ficheiro enviado) pra dentro da app, como uma view nova
+("Gestão de Turnos"), importando os dados que já lá estavam (JSON
+enviado) e passando a gravar as alterações na dashboard.db em vez de
+localStorage.
+
+Decisões confirmadas com o utilizador antes de começar (dado o tamanho
+da tarefa):
+1. Gravação: botão "Guardar" explícito — pinta em memória, só grava no
+   backend quando se clica em Guardar (não é grava-a-cada-clique, ao
+   contrário da ferramenta original).
+2. Âmbito: os 4 separadores da ferramenta original de uma vez (Escala,
+   Estatísticas Mensais, Estatísticas Anuais, Métricas Individuais).
+
+Esta é a PRIMEIRA parte da app com endpoints de ESCRITA — até agora
+tudo era só leitura de dados vindos do ServiceNow.
+
+1. MODELO DE DADOS + IMPORTAÇÃO DOS DADOS EXISTENTES
+----------------------------------------------------------
+- backend/data/turnos_seed.json (novo): o JSON enviado, guardado no
+  repositório — é a "BD antiga" da ferramenta HTML, preservada como
+  dados iniciais.
+- backend/services/turnos_service.py (novo):
+  - Schema: `turnos_employees(id, name, pos, hidden, sort_order)` +
+    `turnos_shifts(employee_id, date, shift)` — diferente do padrão
+    UPSERT do resto do cache.py (essa lógica existe pra lidar com o
+    ServiceNow a purgar dados antigos; aqui não há purga nenhuma, é a
+    própria app que escreve).
+  - `seed_if_empty()`: importa o turnos_seed.json (convertendo o
+    formato antigo "monthly: {'YYYY-M com mês 0-indexado': {dia:
+    turno}}" pra datas reais "YYYY-MM-DD") SÓ se "turnos_employees"
+    estiver vazia — chamado uma vez no arranque da app (main.py), pra
+    nunca sobrescrever trabalho real feito na app nova.
+  - CRUD de colaboradores + leitura do ano inteiro de turnos + escrita
+    por mês (substitui tudo o mês desse colaborador de uma vez, igual
+    à semântica do botão "Guardar").
+- backend/routers/turnos.py (novo): GET/POST/PATCH/DELETE
+  /api/turnos/employees, GET /api/turnos/shifts?year=, PUT
+  /api/turnos/employees/{id}/shifts, POST /api/turnos/clear-month.
+- backend/main.py: `seed_if_empty()` chamado no evento de arranque, a
+  seguir aos routers novos incluídos.
+
+Testado com dados reais: importação deu 10 colaboradores e 1057 dias
+com turno atribuído em 2026 (bate com o JSON de origem). Ciclo completo
+testado via TestClient: criar colaborador → gravar turnos de um mês →
+ler de volta → apagar colaborador → confirmar que os turnos desapareceram
+também (ON DELETE CASCADE). Testado também que a app arranca
+normalmente com `seed_if_empty()` a correr todas as vezes (idempotente
+— não faz nada se já houver colaboradores).
+
+2. FRONTEND — CÁLCULOS PORTADOS
+-------------------------------------
+- frontend/src/utils/turnosCalc.js (novo): mesma lógica de cálculo da
+  ferramenta original (weekendStats, longFreeStreaks, computeEmployeeMonth/
+  Annual, coverageByDay...) reescrita em cima de datas ISO
+  ("YYYY-MM-DD") em vez do formato "monthly" antigo com mês 0-indexado
+  — mais simples de portar pra React sem arrastar as duas convenções.
+- frontend/src/service/turnosApi.js (novo): cliente HTTP dos endpoints
+  novos (incluindo os de escrita — PUT/POST/PATCH/DELETE, os primeiros
+  desta app).
+
+3. SEPARADOR "ESCALA"
+-------------------------
+- frontend/src/components/Turnos/EscalaTab.jsx (novo): grelha de
+  pintura (pincel com os 7 turnos + apagar, clicar ou arrastar pinta),
+  cobertura M/T/N por dia com aviso visual, alerta de mais de 3 dias
+  livres seguidos, gestão de colaboradores (adicionar/ocultar/mostrar
+  todos/remover — estas ações são imediatas, não passam pelo botão
+  Guardar) e o botão "Guardar" que grava o mês inteiro de todos os
+  colaboradores de uma vez.
+  - Decisão técnica: o rascunho local (pintura ainda não guardada) é
+    reiniciado por REMOUNT do componente (`key={year-month}` no
+    componente pai), não por um `useEffect` a chamar `setState` — é o
+    padrão que o eslint deste projeto (react-hooks mais recente) exige
+    (apanhado só ao correr o lint, não adivinhado).
+  - Turnos.jsx pergunta confirmação antes de mudar de mês/ano/separador
+    se houver alterações da Escala por guardar — sem isto, seria fácil
+    perder trabalho sem querer (a ferramenta original gravava a cada
+    clique, esta não).
+
+4. SEPARADORES "ESTATÍSTICAS MENSAIS"/"ESTATÍSTICAS ANUAIS"
+------------------------------------------------------------------
+- frontend/src/components/Turnos/EstatisticasTab.jsx (novo):
+  reaproveitado pelos dois separadores (só muda `months`/`isAnnual`) —
+  rankings (dias trabalhados, horas noturnas, férias, FDS trabalhados),
+  tabela de totais por colaborador, distribuição % de turnos (barra
+  colorida por colaborador) e, só no anual, médias mensais por
+  colaborador (calculadas só sobre os meses com atividade de cada um,
+  igual ao original).
+
+5. SEPARADOR "MÉTRICAS INDIVIDUAIS"
+-----------------------------------------
+- frontend/src/components/Turnos/MetricasIndividuaisTab.jsx (novo):
+  seletor de operador + métrica, gráfico de barras (evolução mensal,
+  ano inteiro) com valores por cima de cada barra — reaproveita o
+  BarValueLabels.jsx já construído hoje pros gráficos do Report SLAs,
+  em vez de duplicar lógica.
+
+6. LIGAÇÃO NA APP
+-----------------------
+- frontend/src/pages/Turnos.jsx (novo): página com os 4 separadores +
+  seletor de mês/ano partilhado.
+- frontend/src/App.jsx: rota "/services/turnos".
+- frontend/src/layouts/MainLayout.jsx: link "Gestão de Turnos" na
+  sidebar.
+
+VALIDAÇÃO: `npx eslint` apanhou 3 problemas reais (não estilo) antes de
+eu reportar como pronto — 2 no EscalaTab.jsx (setState dentro de useEffect,
+corrigido com o padrão de remount por `key`) e 1 no EstatisticasTab.jsx
+(uma variável a ser alterada durante o render de uma lista, corrigido
+somando os totais num `.reduce()` à parte antes de renderizar). `npm run
+build` com sucesso depois das correções. Backend validado
+end-to-end com TestClient contra a dashboard.db real.
+
+LIMITAÇÃO: não há como testar a interação de arrastar-para-pintar nem
+ver a grelha renderizada sem abrir num browser real — a lógica e o
+fluxo de dados foram validados (build + testes de API), mas o
+comportamento visual/interativo fino (scroll, sticky columns, drag)
+vale a pena confirmar visualmente.
+
+
+ALTERAÇÕES FS — 2026-08-04 (continuação 10, mesmo dia) — CALLS_URL
+================================================================================
+
+Pergunta: porque é que a app não estava a consumir o Excel CALLS_URL?
+
+Diagnóstico: exatamente a mesma situação do JUSTIFICACOES_URL antes de
+hoje — está no .env/config.py, mas o cache.py nunca chegou a usá-lo.
+CALLS_URL é SharePoint ("Acompanhamento de Calls"), não ServiceNow, e
+as credenciais SN_USER/SN_PASS não servem pra autenticar lá — só dá pra
+ler manualmente de um ficheiro em backend/downloads/.
+
+Corrigido, reaproveitando a MESMA infraestrutura montada hoje pras
+Justificações:
+- backend/config.py: `SN_FILENAME_CALLS` (default "CALLS_URL.xlsx").
+- backend/cache.py:
+  - "calls" adicionado a `_build_filename_candidates`/`SERVICENOW_URLS`
+    (URL de busca automática sempre None, igual à justificacoes) e
+    `SHEET_NAMES` (a sheet real chama-se "Sheet-1-Acompanhamento de
+    Calls" — confirmado abrindo backend/downloads/CALLS_URL.xlsx).
+  - Nova `_save_calls_table()`: grava por SUBSTITUIÇÃO total (mesmo
+    raciocínio da tabela de justificações — planilha do SharePoint
+    mantida manualmente, sem conceito de purga/backlog). Refatorei o
+    `_store_and_clean_csvs` pra usar um dict `REPLACE_TABLE_SAVERS`
+    (justificacoes + calls) em vez de um `if table_name == "justificacoes"`
+    a crescer — mais fácil de adicionar a próxima tabela deste tipo.
+  - Nome de tabela "calls" (diferente de "tag_calls_gcc", que é um
+    export do ServiceNow sem relação nenhuma com isto).
+
+Schema real confirmado (20 colunas, 215 linhas, 197 incidentes únicos):
+"Update title", "Submit time", "Occurrence", "Submitter's name",
+"Submitter's email", "Tipo", "Id de ticket" (número do incidente, ex:
+"INC0034522" — chave de join), "Prioridade", "Motivo", "Estado" ("New"/
+"Follow-up" — parece que cada call pode ter mais de uma entrada, uma
+por atualização), "Data de Inicio", "Data de Fim", "Participantes",
+"Aplicação", "Geografia", "Impacto", "Causa", "Ações de Resolução",
+"Resumo da Call", "Attachment link".
+
+Testado com o ficheiro real: 215 linhas lidas e gravadas corretamente
+na dashboard.db (só a tabela nova "calls" foi tocada), ciclo completo
+`fetch_and_download_csvs` + `_store_and_clean_csvs` testado (ficheiro
+de downloads/ corretamente removido a seguir, igual ao resto). Smoke
+test dos endpoints principais depois da mudança — tudo 200 OK.
+
+ÂMBITO: perguntei onde mostrar isto na UI (nova página "Calls"? dentro
+dos incidentes existentes?) — resposta: só a base de dados por agora,
+sem UI nesta ronda. Fica pronto a consultar quando for pedido.
+
+
+ALTERAÇÕES FS — 2026-08-05 — Filtro de período aplicado aos gráficos de tendência (Report SLAs)
+================================================================================
+
+Pedido: "quero que o filtro de periodo de tempo seja aplicado a todos
+os graficos e paginas, se estiver com um periodo selecionado quero
+apenas esse periodo visivel" — screenshot mostrava o DateRangeFilter
+em "01/07/2026 — 31/07/2026" mas os 6 gráficos de tendência do Report
+SLAs (SLA1-4, Incidentes por Prioridade, Com Evento vs Sem Evento)
+continuavam a mostrar os 4 meses inteiros disponíveis (05 a 08/2026).
+
+Causa: `history_service.get_sla_trend()` ignorava por completo o
+intervalo do filtro — iterava sempre `get_available_months()` (todo o
+histórico gravado na BD), chamando `get_monthly_summary(mes)` para
+cada um. As outras páginas (Visão Geral, Central Operacional, AIOPER)
+já usam `getRangeSummary(start, end)` corretamente; só esta secção
+(SlaDetailSection, os painéis de tendência mensal) tinha o problema.
+
+Corrigido:
+- backend/services/history_service.py: nova `_month_slices(start, end)`
+  — devolve `[(rótulo 'YYYY-MM', fatia_start, fatia_end), ...]`
+  cobrindo o intervalo pedido, mês a mês, onde cada fatia é a
+  INTERSEÇÃO desse mês com [start,end] (não o mês inteiro — se o
+  filtro começa a meio de julho, a fatia de julho só conta a partir
+  desse dia). `get_sla_trend(start, end, region=None)` passou a
+  receber start/end (antes só tinha region) e agora itera essas
+  fatias chamando `get_range_summary(fatia_start, fatia_end, region)`
+  em vez de `get_monthly_summary(mes_inteiro, region)`.
+- backend/routers/dashboard.py: `/dashboard/sla-trend` passou a exigir
+  `start`/`end` como query params obrigatórios (antes eram opcionais/
+  inexistentes), com try/except a devolver 500 com detalhe em caso de
+  falha — igual ao padrão dos outros endpoints de range.
+- frontend/src/service/dashboardApi.js: `getSlaTrend(start, end,
+  region)` — envia start/end sempre.
+- frontend/src/components/Sections/SlaDetailSection.jsx: a query do
+  trend passou a incluir `range.start`/`range.end` na queryKey e só
+  corre com `enabled: !!range` (mesmo padrão da query do range-summary
+  ao lado).
+- frontend/src/components/Charts/TrendChart.jsx: a condição de "sem
+  dados" mudou de `data.length < 2` (mensagem "precisa de 2+ meses")
+  para `data.length === 0` (mensagem "Sem dados no período
+  selecionado") — com o filtro a poder isolar um único mês agora, um
+  só ponto/coluna é um resultado normal e deve desenhar-se, não ser
+  tratado como "app ainda sem histórico".
+
+Testado:
+- Chamada direta a `get_sla_trend('2026-07-01','2026-07-31')` →
+  só `['2026-07']` (antes seriam sempre os 4 meses).
+- Fatiamento parcial: `get_sla_trend('2026-06-15','2026-07-10')` →
+  `['2026-06','2026-07']`, com junho a contar só 1097 incidentes (a
+  fatia 15-30) em vez dos 2053 do mês inteiro — confirma que a
+  interseção está a cortar corretamente, não a contar o mês todo.
+- TestClient: `/api/dashboard/sla-trend` com range de 1 mês (200,
+  só julho), com o intervalo completo disponível (200, os 4 meses —
+  continua a funcionar quando o filtro cobre tudo), com `region`
+  (200), e sem start/end (422 — quebra de contrato esperada e
+  aceitável, já que o frontend nunca chama sem um `range` definido).
+  Endpoints não relacionados (`/range`, `/monthly`, `/operators`,
+  `/bounds`, `/months`) continuam todos 200 depois da mudança.
+- `npx eslint` nos 3 ficheiros frontend tocados: 0 erros.
+- `npm run build`: sucesso.
+
+Não fiz alterações a mais nenhuma página — Visão Geral, Central
+Operacional e AIOPER já respeitavam o intervalo selecionado antes
+desta mudança (usam `getRangeSummary` diretamente, não passavam pelo
+`get_sla_trend`), então o problema estava isolado aos 6 gráficos de
+tendência do Report SLAs.
+
+LIMITAÇÃO: como sempre, não consigo abrir a app num browser para
+confirmar visualmente que os gráficos agora mostram só julho — a
+lógica está validada ponta a ponta (backend direto + TestClient +
+build), mas vale a pena confirmar visualmente com o mesmo filtro do
+screenshot.
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Atividade Operacional em Central Operacional (substitui "Atividade da Equipa")
+================================================================================
+
+Pedido: adaptar um protótipo HTML standalone (upload manual de
+resolvidos.csv + incidentes mensais.xlsx, com Chart.js) para a nossa
+realidade — consumir os dados já na BD em vez de ficheiros carregados à
+mão — e integrar em Central Operacional, no lugar da tabela simples
+"Atividade da Equipa". Requisitos explícitos:
+- Vista global, filtrada pelo nosso filtro de período já existente
+  (sem seletor de mês próprio — diferente do protótipo, que tinha um
+  <select> de mês por separador; removido conforme pedido).
+- Vista individual (por operador).
+- "incidentes abertos" = todos os incidentes cujo "Técnico" (Opened by)
+  é o operador — não é o estado do incidente.
+- "incidentes resolvidos" = tags "OK_GCC" feitas pelo operador (tabela
+  "ok_"), NÃO o estado "Closed" do ServiceNow.
+- Distinção de equipa PT/BR só nestes gráficos novos, baseada em onde a
+  PESSOA está sediada — nada a ver com a geografia do incidente (Ibéria/
+  Brasil, "Column Measure", usada no resto da app). Lista replicada tal
+  como veio no protótipo (TEAM_PT/TEAM_BR do HTML), mapeada para os
+  nomes atuais em team_service.USUARIOS; quem não consta em nenhuma das
+  duas (bot AIOPS, liderança) cai em "Sem equipa".
+
+Implementado:
+- backend/services/operational_activity_service.py (novo): agrega
+  eventos de "abertos" (Técnico + opened_at de gcc_abertos, já
+  enriquecido/filtrado) e "resolvidos" (Created by + Created da tabela
+  ok_, já restrita aos incidentes do filtro via team_service.
+  filter_ok_by_incident_set — reaproveitada, não duplicada) por hora do
+  dia, dia da semana, mês e turno (Manhã 09-17 / Tarde 17-01 / Noite
+  01-09, mesmos limites do protótipo). `get_operational_activity()`
+  devolve `{"global": {...}, "individual": [...]}`, cada vista com
+  kpis (totais + médias/dia), destaques (dia mais movimentado, hora de
+  pico, dia da semana mais produtivo, melhor mês — abertos vs
+  resolvidos lado a lado), turnos, e 3 séries prontas pra gráfico
+  (distribuicao_horaria, distribuicao_semana, evolucao_mensal). A vista
+  global ainda tem "equipas" (contagem PT/BR/Sem-equipa de abertos e
+  resolvidos).
+- backend/services/history_service.py: `_compute_team_activity` virou
+  `_compute_team_and_operational_activity` — calcula
+  `filter_ok_by_incident_set` UMA VEZ SÓ e alimenta tanto
+  `team_service.get_team_activity` (mantido, só deixou de ter UI própria)
+  quanto `operational_activity_service.get_operational_activity`.
+  `get_monthly_summary`/`get_range_summary` agora populam
+  `result["operational_activity"]` no mesmo ponto que já populavam
+  `result["team_activity"]` — sem endpoint novo, viaja no mesmo payload
+  de `/dashboard/monthly` e `/dashboard/range` (igual a source_by_day,
+  team_activity, etc.).
+- frontend/src/components/Charts/TrendChart.jsx: novo prop `xKey`
+  (default `"month"`, compatível com todos os usos existentes) — deixa
+  de estar hardcoded ao eixo de meses, reaproveitado agora também pros
+  gráficos de "hora do dia" (`xKey="hour"`) e "dia da semana"
+  (`xKey="weekday"`) desta secção nova. Repassado a BarValueLabels/
+  LineValueLabels/ThresholdTrendLine via `categoryKey` (prop já
+  genérica nesses componentes, só não estava a ser aproveitada).
+- frontend/src/components/Sections/OperationalActivitySection.jsx
+  (novo): separador Visão Global / Visão Individual (seletor de
+  operador, sem chamada extra à API — os dados de todos os operadores
+  já vêm no mesmo payload). KPIs, destaques (abertos vs resolvidos lado
+  a lado), cards de turno, bloco "Trabalho por Geografia da Equipa"
+  (PT/BR/Sem equipa, só na vista global) e os 3 gráficos (Distribuição
+  Horária, Distribuição por Dia da Semana, Evolução Mensal), todos
+  reaproveitando TrendChart/BarValueLabels/LineValueLabels já existentes
+  no resto da app (mesmo estilo visual, dark/light mode incluído).
+- frontend/src/pages/CentralOperacional.jsx: bloco "Atividade da
+  Equipa" (TeamActivityTable) substituído pelo novo
+  <OperationalActivitySection data={summary?.operational_activity} />.
+- frontend/src/components/Tables/TeamActivityTable.jsx: removido
+  (ficou sem nenhum consumidor). O endpoint/serviço `team_activity`
+  (backend) foi mantido tal como estava — só perdeu a UI própria, os
+  seus números já estão implicitamente cobertos pela vista individual
+  nova (kpis.total_abertos/total_resolvidos por operador).
+
+Testado:
+- `get_range_summary('2026-07-01','2026-07-31')` direto: kpis globais
+  (2665 abertos / 2511 resolvidos, médias ~86/81 por dia), equipas
+  (PT 924/1353, BR 956/1137, Sem-equipa 785/21 — os 785 batem
+  exatamente com AIOPS bot (765, só abre, nunca resolve) + liderança
+  (Francisco Salgado 11 + André Fernandes 9)), turnos e séries
+  hora/semana/mês com valores plausíveis.
+- Lista individual conferida nome a nome (17 operadores): cada PT/BR
+  bate com a lista replicada do protótipo, bot e liderança corretamente
+  em "Sem equipa".
+- TestClient: `/api/dashboard/range` (200, com e sem `region=Brasil` —
+  Brasil reduz corretamente pra 624/577 vs 2665/2511 global, confirma
+  que o filtro de região já se propaga através do
+  filter_ok_by_incident_set existente) e `/api/dashboard/monthly` (200)
+  ambos com `operational_activity` no payload.
+- `npx eslint` nos ficheiros tocados: 0 erros. `npm run build`: sucesso.
+
+LIMITAÇÃO: como sempre, não consigo abrir a app num browser pra
+confirmar visualmente o layout (separadores, seletor de operador,
+gráficos) — a lógica de dados e o build estão validados, mas vale a
+pena conferir visualmente, sobretudo o dropdown de operadores e a
+troca de separador Global/Individual.
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Otimização geral (backend + frontend)
+================================================================================
+
+Pedido: "vamos otimizar e melhorar o codigo... tornar a app mais rapida
+e melhor" — passagem geral, sem alvo específico. Investiguei antes de
+mexer (quem consome o quê, onde está o tempo a ser gasto) em vez de
+otimizar às cegas, pra não arriscar mudar comportamento por engano numa
+app com dados reais em produção.
+
+--- Achado principal: cálculo morto a correr a cada ciclo do scheduler ---
+
+backend/cache.py: _compute_derived_cache() rodava a CADA ciclo (a cada
+CACHE_REFRESH_MINUTES, default 20 min, pra sempre, desde o arranque do
+servidor) um pipeline completo — enrich_sys_report_template() (todas as
+transformações linha a linha) + ~12 funções de métricas (kpis,
+priority_breakdown, tools_breakdown, incidents_summary, operators_
+summary, quality_metrics, aioper_summary, sem_evento_summary, sla_
+overview, sla3/sla4_detailed) — só pra guardar tudo isso em CACHE.
+
+Investigação (grep de "CACHE[" e "CACHE.get" em todo o backend/
+routers): NENHUM endpoint lê mais essas chaves de CACHE. Confirmado
+ficheiro a ficheiro — dashboard.py, sla.py, incidents.py, operators.py
+e a maior parte de analytics.py já tinham migrado pra ler do histórico
+no SQLite (history_service.py) numa passagem anterior desta sessão. Só
+backlog_summary/despromovidos_summary (analytics.py) ainda liam de
+CACHE — e essas tabelas (mon_backlog_incs/ritm, despromovidos) estão
+desativadas há tempos (comentadas em cache.py, sem link configurado),
+então nunca chegavam a dfs mesmo assim: davam sempre erro de qualquer
+forma. Ou seja: _compute_derived_cache() inteiro rodava pra ninguém.
+
+Corrigido: refresh_all() agora só faz o que interessa de verdade —
+baixar (fetch_and_download_csvs) + gravar no SQLite
+(_store_and_clean_csvs), que é o que o history_service.py de facto
+lê em cada pedido da API. _compute_derived_cache() removido, junto
+com os imports que só ele usava (dashboard_service, incidents_service,
+operators_service, sla_service, enrich_sys_report_template,
+exclude_hidden_technicians, exclude_canceled_incidents — todos ainda
+usados noutros ficheiros, só não em cache.py). Erros fixos pra
+backlog/despromovidos (tabelas desativadas) substituem o cálculo que já
+falhava sempre. Sem mudança de comportamento pra ninguém: as 2 chaves
+que ainda eram lidas (/analytics/backlog, /analytics/despromovidos)
+já devolviam 503 antes desta mudança, continuam a devolver 503 agora,
+só que sem gastar CPU/memória a tentar calcular o resto primeiro.
+
+--- transform.py: vetorização + remoção de coluna morta ---
+
+enrich_sys_report_template() corre a CADA pedido (não só no ciclo do
+scheduler) — toda vez que alguém abre Visão Geral, Central Operacional,
+Report SLAs ou AIOPER. Tinha 5 passagens df.apply(axis=1) (uma função
+Python por linha, lenta em dataframes de milhares de linhas):
+
+1. add_turno_column (coluna "Turno") — CONFIRMADO (grep) que nada
+   downstream nunca leu essa coluna desde a migração 2026-08 (a lista de
+   técnicos TECNICOS_BR/TECNICOS_PT também já estava desatualizada, com
+   nomes de uma equipa antiga). Removida por completo — função,
+   constantes e a chamada dentro do pipeline. Elimina uma passagem
+   .apply() inteira que só produzia um dado descartado.
+2. add_region_column — vetorizada (Series.str.contains + np.where em
+   vez de função por linha). Mesmo resultado, ~100x mais rápido nessa
+   passagem isolada (é operação C-level do pandas/numpy em vez de
+   chamar Python linha a linha).
+3. add_grupo_column — vetorizada (Series booleanas + np.select),
+   preservando exatamente a mesma prioridade AIOPER > Monitorização >
+   Operação do if/elif original (inclusive o detalhe de
+   MONITORIZACAO_NOMES comparar com o nome tal como veio, não
+   maiúsculas — preservado de propósito).
+4. _event_id (usado por keyword_found e source dentro de
+   add_keyword_columns) — recalculava a mesma string de correlation_id+
+   correlation_display DUAS VEZES por linha (uma em cada apply). Agora
+   _event_id_series() calcula uma vez só (vetorizado) antes dos dois
+   applies, que passaram a ler o valor já pronto numa coluna temporária
+   (removida no fim). add_keyword_columns em si (a lógica de match
+   contra KEYWORD_LIST) ficou como estava — vetorizar isso teria mais
+   risco de mudar comportamento sutilmente, não valeu o risco nesta
+   passagem.
+
+Validação de correção (não só "não deu erro" — output IDÊNTICO):
+capturei get_range_summary('2026-07-01','2026-07-31') e
+get_monthly_summary('2026-07') completos ANTES de tocar em
+transform.py (git stash), depois DEPOIS das mudanças, e fiz diff dos
+dois JSONs (ordenados, tudo incluído) — zero diferenças nos dois casos.
+
+Medição real de performance (mesma chamada, git stash/stash pop
+pra comparar antes/depois no mesmo dado real, média de 5 chamadas):
+get_range_summary('2026-05-01','2026-08-04') (4 meses, a chamada mais
+pesada da app, repetida várias vezes em cada carregamento do Report
+SLAs por causa do _month_slices) — ANTES: 5486ms/chamada, DEPOIS:
+2443ms/chamada. Mais de 2x mais rápido, com output bit-a-bit idêntico.
+
+--- history_service.py: função morta ---
+
+_read_justificacoes_parsed() — definida mas nunca chamada em lado
+nenhum (confirmado por grep; já tinha sido sinalizada como não-usada
+por um diagnóstico do IDE numa passagem anterior desta sessão).
+Removida.
+
+--- Frontend: code-splitting das rotas ---
+
+frontend/src/App.jsx: as 12 páginas eram todas importadas
+estaticamente — entravam TODAS no mesmo chunk inicial (837KB,
+disparando o aviso do Vite de "chunk maior que 500KB"), mesmo o
+utilizador só visitando 1-2 páginas por sessão. Convertidas pra
+React.lazy() + <Suspense> no <Routes>, cada página vira o seu
+próprio ficheiro JS, só baixado quando a rota é navegada.
+
+Resultado real do build: chunk principal caiu de 845KB pra 351KB (-58%),
+o aviso de chunk grande desapareceu, e cada página (Turnos, AIOper,
+CentralOperacional, SLA, etc.) ficou no seu próprio ficheiro (0.4KB a
+31KB cada), carregado sob demanda.
+
+--- Frontend: cache do react-query ---
+
+frontend/src/main.jsx: QueryClient usava as opções default
+(staleTime: 0, refetchOnWindowFocus: true) — cada vez que o
+utilizador voltava à aba do browser, TODAS as queries ativas refaziam o
+pedido ao backend, mesmo que o dado do servidor só mude a cada ciclo do
+scheduler (20 min por default). Isso incluía os pedidos mais pesados
+(range-summary, sla-trend), que agora sabemos custar segundos cada.
+Configurado staleTime: 5 min + refetchOnWindowFocus: false —
+reduz pedidos redundantes sem sacrificar frescura real (o dado só muda
+de 20 em 20 min de qualquer forma; uma nova seleção de período/região
+continua a disparar um pedido novo na hora, porque muda a queryKey).
+
+--- Frontend: 2 bugs reais de lint corrigidos (não só otimização) ---
+
+PriorityChart.jsx/ToolChart.jsx (usados em AIOper): mutavam uma
+variável currentOffset DENTRO do .map() que devolve o JSX do
+gráfico donut — mesma classe de bug (real, não só estilo) já corrigida
+noutro componente mais cedo nesta sessão (EstatisticasTab.jsx, Gestão
+de Turnos). Corrigido calculando os offsets acumulados via .reduce()
+ANTES do render, igual ao padrão já validado.
+
+main.jsx: MuiThemeBridge estava definido inline no ficheiro de
+entrada, ao lado de código não-componente (queryClient, root) — quebra
+o Fast Refresh do Vite em dev (não é bug de produção, só ergonomia).
+Extraído pra context/MuiThemeBridge.jsx próprio.
+
+Deixados de propósito (nits de lint pré-existentes, sem impacto em
+produção, risco > benefício nesta passagem): DateRangeFilter.jsx tem
+um setState dentro de um useEffect que o linter marca como
+suspeito — mas o array de dependências já é deliberado (ctxRange de
+propósito fora, com eslint-disable existente de uma passagem anterior),
+é um componente crítico e muito usado, difícil de validar visualmente
+sem browser, e o "bug" é só heurística de estilo, não um erro
+observado. DateRangeContext.jsx/ThemeContext.jsx misturam
+componente+hook+constantes no mesmo ficheiro (quebra Fast Refresh em
+dev, zero impacto em produção) — churn desnecessário pra esta passagem.
+
+Validação final: npx eslint src (só os 3 avisos deixados de propósito
+acima, documentados, mais nenhum erro), npm run build (sucesso, bundle
+menor, sem aviso de chunk grande), TestClient completo em 21 endpoints
+(todos 200, exceto backlog/despromovidos que já eram 503 antes — mesmo
+comportamento de sempre), diff de output byte-a-byte idêntico ao
+comportamento anterior nos dois cálculos mais pesados da app.
+
+LIMITAÇÃO: não consigo medir o ganho real percebido no browser (tempo
+até interativo, etc.) — os números acima são medidos diretamente
+(tempo de backend via timeit, tamanho de bundle via output do build),
+não estimados.
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Nova view "Major Incs"
+================================================================================
+
+Pedido: nova view entre "AIOPER" e "Gestão de Turnos", com o nome
+"Major Incs", analisando incidentes P1 (tratados vs despromovidos) e
+Calls do GCC, réplica adaptada de 2 screenshots do dashboard Power BI
+original fornecidos como referência. Também pedido: renomear a tabela
+"TAG_CALLS_GCC_URL" para "INCS_CALLS_GCC_URL" (agora são todos os
+incidentes com a tag Calls_GCC, não mais um export a nível de tag).
+
+--- Fonte 1: Despromovidos (task_sla_list.do, URL DINÂMICA) ---
+
+O utilizador deu uma URL de referência (task_sla_list.do filtrada por
+sys_created_by de cada operador da equipa) pedindo explicitamente que
+fosse dinâmica — "a cada novo operador deve ser adicionado o ex dele".
+Implementado em backend/cache.py: nova _build_despromovidos_url(),
+monta a query a partir de team_service.USUARIOS.keys() (+ conta fixa
+"SAAIOPSP14" do bot AIOPS, confirmado com o utilizador) — sem URL
+nenhuma fixa no .env, um operador novo entra automaticamente assim que
+é adicionado a team_service.USUARIOS.
+
+Durante a implementação, o primeiro ficheiro de exemplo do utilizador
+não tinha o campo "SLA definition" (usado pela lógica já existente do
+SLA4 pra saber a prioridade de cada linha) — perguntei como distinguir
+"tratado como P1" de "despromovido" sem esse campo; o utilizador
+corrigiu a URL (fields errados) e confirmou schema IDÊNTICO ao
+SLA4_URL já existente. Isso permitiu reaproveitar 100% da lógica já
+validada do SLA4 (sla_service.py):
+- prepare_sla_rows() (renomeada de _prepare_sla4 — passou a pública,
+  reutilizada por 2 módulos agora) e nova get_p1_task_sets(df), que
+  devolve (p1_tasks, bad_tasks): task entra em p1_tasks se a PRIMEIRA
+  linha de SLA é P1; entra também em bad_tasks se QUALQUER linha
+  seguinte é de prioridade diferente (= despromovido). "Tratados como
+  P1" = p1_tasks - bad_tasks. _compute_sla4_from_prepared (SLA4
+  existente) passou a chamar get_p1_task_sets por dentro — refactor
+  puro, validado com git stash (SLA4 dá exatamente o mesmo resultado
+  antes/depois).
+- backend/services/major_incs_service.py (novo): get_despromovidos_
+  detail(raw, gcc_abertos_enriched, start, end) — filtra as linhas de
+  SLA por "start_time" no período, aplica get_p1_task_sets, e cruza
+  cada número de incidente com "gcc_abertos" já enriquecido (mesmo
+  período/região) pra puxar Data/Canal/Geo/Descrição — incidentes sem
+  match (a busca de Despromovidos filtra por autor da SLA, não por
+  origem GCC, então nem todo despromovido aparece em GCC Abertos)
+  entram só com o número, resto em branco, pra não sub-contar.
+
+--- Fonte 2: incs_calls_gcc (RENOMEADA de tag_calls_gcc) ---
+
+backend/config.py: TAG_CALLS_GCC_URL/SN_FILENAME_TAG_CALLS_GCC
+renomeados pra INCS_CALLS_GCC_URL/SN_FILENAME_INCS_CALLS_GCC. backend/
+.env: variável já tinha sido renomeada pelo próprio utilizador (URL
+mudou de label_entry_list.do pra incident_list.do — nível de incidente,
+não de tag); só faltava o código acompanhar. backend/cache.py: tabela
+"tag_calls_gcc" (chave "Title", schema de tag/evento) virou
+"incs_calls_gcc" (chave "Number", schema de incidente — igual a "gcc_
+abertos"). A tabela antiga "tag_calls_gcc" ficou órfã na BD (dado
+histórico, sem custo manter, mesmo padrão de outras tabelas
+descontinuadas como sys_report_template/sla3_grupos).
+
+Esta fonte NÃO acabou sendo usada diretamente em Major Incs — os 4
+pies/tabela/gráficos de Calls vêm da tabela "calls" (SharePoint,
+Acompanhamento de Calls, já integrada numa feature anterior desta
+sessão). incs_calls_gcc fica pronta na BD pra uso futuro.
+
+--- Fonte 3: Calls (tabela "calls", já existente) ---
+
+Schema real confirmado (215 linhas): "Prioridade (se aplicável)" só
+tem valor pra Tipo="Incidente" (P1/P2/P3) — pra Change/Problem fica em
+branco (18 valores, batendo exatamente com 17 Change + 1 Problem).
+major_incs_service._priority_or_type() cai no "Tipo" nesse caso — é
+assim que o pie "Prioridade" do dashboard original mistura P1-P4 com
+Change/Problem, confirmado com os dados reais. O pie "Tipo" da imagem
+de referência (valores "New"/"Follow-up") na verdade mapeia pra nossa
+coluna "Estado", não "Tipo" (que tem Incidente/Change/Problem) — os
+nomes não batem 1:1 com o Power BI original, mantive o LAYOUT igual
+(4 pies: Geografia/Prioridade/Motivo/Tipo) e a fonte de dado mais
+correta por baixo de cada um.
+
+get_calls_detail(raw, start, end, region): filtra por "Data de Inicio"
+(parse com dayfirst=True — formatos inconsistentes nos dados reais,
+"6/07/26 10:16" vs "02/07/2026 14:45" vs "26/06/26  18:24" com espaço
+duplo, todos corretamente parseados) + geografia; calcula duração por
+linha (Data de Fim - Data de Inicio); agrega por "Id de ticket"
+(tabela) e por dia (2 séries: nº de calls por prioridade, tempo total
+em call).
+
+--- Backend: endpoint novo ---
+
+backend/services/history_service.py: get_major_incs_summary(start, end,
+region) — junta os dois detalhes acima; o "gcc_abertos" usado pra
+cruzar detalhe dos despromovidos é o já filtrado por período/região
+(mesma limitação já aceite pro SLA4-por-região existente: um incidente
+fora do período com uma linha de SLA dentro dele aparece só com o
+número, sem detalhe — cruzar com o histórico completo seria reverter a
+otimização do enrich_sys_report_template pra todo pedido, por um caso
+de borda raro).
+backend/routers/major_incs.py (novo): GET /api/major-incs?start=&end=
+&region= — registado em main.py.
+
+--- Frontend ---
+
+frontend/src/components/Charts/TrendChart.jsx (+ BarValueLabels/
+LineValueLabels): novo prop opcional `valueFormatter` — o rótulo de
+cada barra/ponto e os ticks do eixo Y passam a poder ser formatados
+(ex: segundos -> "01:08:00"), sem mudar nada nos usos existentes (só
+ativa se o prop for passado). Precisava disto pro gráfico "Total de
+Tempo em Call" mostrar HH:MM:SS como no exemplo, em vez de segundos
+brutos.
+frontend/src/components/Charts/SimplePieChart.jsx (novo): pie genérico
+label/val com paleta default, reaproveitado pelos 4 pies de Calls
+(diferente de ToolsPieChartMui.jsx, que tem paleta fixa por
+ferramenta).
+frontend/src/pages/MajorIncs.jsx (novo): 2 blocos — "P1's
+Despromovidos" (2 KPIs, 2 tabelas de incidentes lado a lado, gráfico
+diário tratados-vs-despromovidos) e "Calls" (2 KPIs, 4 pies, tabela por
+ticket, gráfico diário de calls por prioridade, gráfico diário de
+tempo em call). Usa o mesmo DateRangeFilter/DateRangeContext
+(Período+Região) partilhado com o resto do MainLayout — sem filtro de
+mês próprio, filtra tudo pelo período selecionado.
+frontend/src/App.jsx: rota /services/major-incs (lazy-loaded, mesmo
+padrão das outras páginas).
+frontend/src/layouts/MainLayout.jsx: link "Major Incs" (ícone Siren) na
+sidebar, entre AIOPER e Gestão de Turnos, como pedido.
+
+Testado:
+- Backend auto-ingeriu os 2 ficheiros reais que o utilizador colocou em
+  downloads/ (Despromovidos_URL.xls, 2203 linhas; INCS_CALLS_GCC_URL.xls,
+  24 linhas) através do próprio servidor de dev do utilizador já a
+  correr — confirmado direto na BD (tabelas "despromovidos" e
+  "incs_calls_gcc" com as contagens certas).
+- Teste sintético isolado de get_p1_task_sets/get_despromovidos_detail
+  (3 tasks fabricadas: 1 tratada, 1 despromovida, 1 nunca-P1) confirma
+  a lógica bate exatamente com o esperado.
+- Nos dados reais atuais (Jun-Ago 2026), 0 P1s tratados/despromovidos
+  pela equipa nesse período — verificado que NÃO é bug: as 92
+  definições de SLA únicas na tabela não têm nenhuma com padrão P1/
+  Nível 1 (só P2/P3/P4), plausível dado que Despromovidos filtra por
+  AUTOR da SLA (equipa específica) e P1s são eventos raros — a lógica
+  de deteção está confirmada correta pelo teste sintético.
+- `/api/major-incs` testado via TestClient (200, com/sem região,
+  vários períodos) + regressão completa dos outros 12 endpoints
+  principais (todos 200).
+- `npx eslint src`: só os 3 avisos pré-existentes já documentados
+  (nenhum novo). `npm run build`: sucesso, MajorIncs.jsx ficou no seu
+  próprio chunk (8.19KB, code-split automático).
+
+LIMITAÇÃO: como sempre, não consigo confirmar visualmente o layout no
+browser — a lógica de dados está validada ponta a ponta (incluindo um
+teste sintético específico pro caso "despromovido" que os dados reais
+atuais não têm exemplos pra confirmar), mas vale a pena conferir
+visualmente assim que houver P1s reais despromovidos no período
+selecionado.
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Major Incs: Calls agora usa incs_calls_gcc também
+================================================================================
+
+Feedback do utilizador (com screenshots reais da view já a funcionar):
+"devias também usar a tabela do INCS_CALLS_GCC_URL que é mais fácil
+para identificar todos os incidentes onde existiu call major". A
+secção Calls só usava a folha SharePoint "calls" (preenchida à mão) —
+incompleta por natureza (alguém pode esquecer-se de preencher), ao
+contrário de "incs_calls_gcc" (ServiceNow, tag Calls_GCC aplicada
+automaticamente ao incidente).
+
+Corrigido em backend/services/major_incs_service.py: get_calls_detail
+passou a receber as DUAS tabelas e fazer uma UNIÃO por número de
+ticket — "incs_calls_gcc" garante que nenhum incidente com a tag fica
+de fora (mesmo sem entrada na folha), "calls" continua a fonte do
+detalhe que só existe lá (Motivo, Estado, duração real da call). Onde
+o mesmo ticket aparece nas duas, o detalhe da "calls" tem prioridade
+(mais rico); onde só está em "incs_calls_gcc", os campos exclusivos da
+folha (Motivo/Estado/duração) ficam em branco em vez de inventados.
+
+Novas funções: _tickets_from_calls_table (agrega a folha por ticket:
+nº de calls, duração somada, geo/prioridade/motivo/estado do primeiro
+registo) e _tickets_from_incs_calls_gcc (extrai data/geo/prioridade de
+incs_calls_gcc, convertendo "1 - Critical" -> "P1" no mesmo formato
+curto da folha, região pela mesma regra de "Parent" usada no resto da
+app). get_calls_detail funde os dois dicts por ticket e recalcula
+pies/tabela/gráficos diários em cima do resultado unido.
+
+history_service.get_major_incs_summary passou a ler também a tabela
+"incs_calls_gcc" e repassar pro get_calls_detail.
+
+Testado com dados reais: "Total de Calls" no período May-Aug 2026 subiu
+de 19 (só folha SharePoint) pra 29 (união com incs_calls_gcc) — 10
+incidentes com a tag Calls_GCC que não tinham entrada na folha. Pie de
+Prioridade passou a incluir um P1 que só existia em incs_calls_gcc
+(nenhuma call P1 estava registada na folha nesse período). Filtro de
+região confere exatamente (Brasil 9 + Ibéria 20 = 29 total). Motivo/
+Tipo continuam menores (19/29) porque só existem na folha SharePoint —
+esperado, não há equivalente desses campos no ServiceNow.
+
+Como a forma da resposta da API não mudou (mesmas chaves), não foi
+preciso tocar no frontend (MajorIncs.jsx) — só a correção de dados no
+backend. TestClient revalidado (200 em todos os cenários, região soma
+certo).
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Major Incs: Calls refinado (incs_calls_gcc dirige, calls_url só duração)
+================================================================================
+
+Feedback do utilizador com 2 screenshots reais da view a funcionar
+(depois da correção anterior, que unia as duas fontes): "estes cards
+na img1 é para serem geridos pela tabela INCS_CALLS_GCC_URL que podes
+fazer match com a tabela CALLS_URL... o da img2 é que é exclusivamente
+da tabela calls_url pois é o tempo que estamos em call". Correção da
+correção anterior: em vez de UNIÃO das duas fontes, a relação certa é
+incs_calls_gcc como população BASE (dirige KPIs/pies/tabela/"Total de
+Calls por dia") com "calls" só a dar MATCH pro detalhe extra; e o
+gráfico de duração é exclusivo de "calls", sem misturar nada de
+incs_calls_gcc.
+
+O utilizador também colocou um ficheiro CALLS_URL.xlsx mais atualizado
+em downloads/ (230 linhas, antes 215) — ingerido manualmente pra
+validar (mesmo ciclo fetch_and_download_csvs + _store_and_clean_csvs
+de sempre, tabela "calls" é REPLACE total).
+
+backend/services/major_incs_service.py, get_calls_detail reescrita:
+- `merged` agora itera SOBRE incs_tickets (não mais união de chaves) —
+  cada ticket com a tag Calls_GCC entra sempre, com match opcional em
+  calls_tickets pro Motivo/Estado/nº de calls/duração (fica em branco
+  se não houver entrada na folha).
+- "Total de Calls"/pies Geografia+Prioridade/"Chamadas por Ticket"/
+  "Total de Calls por dia" — todos calculados em cima de `merged`
+  (dirigidos por incs_calls_gcc).
+- "Total de Tempo em Call" (daily_duracao) e a KPI "Total de Tempo em
+  Call" — voltaram a ser calculados SÓ em cima de calls_tickets (a
+  folha SharePoint), sem passar por `merged` — corrige a "cauda" de
+  pontos 00:00:00 que aparecia no gráfico (dias de tickets só em
+  incs_calls_gcc, sem duração real nenhuma, estavam a zero-preencher a
+  série).
+
+Testado com os dados reais atualizados: "Total de Calls" = 24 (bate
+EXATAMENTE com o número do screenshot do utilizador — confirma que a
+população agora é a certa: os 24 incidentes com a tag Calls_GCC no
+período, não mais a união maior de antes). Região soma certo (Brasil 9
++ Ibéria 15 = 24). daily_duracao passou de ter entradas zero-padded no
+fim pra 18 dias só com duração real (sem cauda). TestClient revalidado
+em todos os cenários (200, contagens batem).
+
+Sem alterações no frontend — forma da resposta da API continua igual,
+só a lógica de que fonte alimenta o quê mudou no backend.
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Major Incs: ajustes visuais (legenda Motivo + eixo de datas)
+================================================================================
+
+Feedback do utilizador (2 screenshots): o pie "Motivo" tinha a legenda
+por cima do próprio donut (labels longos tipo "Solicitado por Minsait"
+não cabiam ao lado do pie num card estreito da grelha de 4 colunas —
+Geografia/Prioridade/Tipo tinham labels curtos e não sofriam disso);
+e pediu que os gráficos diários mostrassem todos os dias (não só
+alguns) com o mês agrupado por baixo e o ano por baixo desse, tipo a
+imagem de referência (hierarquia de datas ao estilo Power BI).
+
+frontend/src/components/Charts/SimplePieChart.jsx: legenda movida de
+"ao lado, coluna" (posição que colidia com o donut quando os labels
+eram longos) pra "por baixo, empilhada" (mesmo princípio já usado nos
+gráficos de barra/linha desta sessão — legenda por baixo evita
+sobreposição). Pie encolhido (outerRadius 80->65, cy fixo a 85px) e
+altura do card aumentada (220->260) pra abrir espaço garantido.
+
+Sobre "todos os dias": as barras/pontos já apareciam todos (uma posição
+por data real nos dados) — o que faltava era só o RÓTULO de texto por
+baixo de cada um, que o MUI X esconde automaticamente quando datas
+completas ("2026-05-25") não cabem lado a lado sem sobrepor. Duas
+peças novas:
+- frontend/src/components/Charts/TrendChart.jsx: novo prop opcional
+  `groupedDateAxis` — quando ativo, o eixo X passa a mostrar só o dia
+  do mês ("5" em vez de "2026-05-25", curto o suficiente pra caber
+  um por dia sem o MUI descartar por colisão) via `valueFormatter` do
+  eixo; margin.bottom/padding da legenda aumentam pra abrir espaço
+  pras 2 linhas extra descritas a seguir.
+- frontend/src/components/Charts/DateAxisGroups.jsx (novo): overlay
+  SVG próprio (mesmo padrão de BarValueLabels/ThresholdTrendLine —
+  hooks públicos useXScale/useDrawingArea, sem depender de nada
+  interno do MUI X) que desenha 2 linhas extra por baixo do eixo:
+  mês (agrupando dias consecutivos do mesmo mês, texto centrado na
+  faixa que esses dias ocupam) e ano por baixo disso — réplica
+  adaptada da hierarquia de datas do Power BI. Como os dados são
+  esparsos (só dias com evento real, não o calendário inteiro), cada
+  grupo de mês abrange só do primeiro ao último dia PRESENTE nos
+  dados, não o mês inteiro.
+
+Aplicado aos 3 gráficos diários de Major Incs (Evolução Diária dos
+Despromovidos, Total de Calls por dia, Total de Tempo em Call por
+dia) — `groupedDateAxis` + `height={340}` (mais alto, pra sobrar
+espaço pras linhas extra sem espremer a área do gráfico).
+
+Validado: `npx eslint src` (só os 3 avisos pré-existentes já
+documentados, nenhum novo) e `npm run build` (sucesso).
+
+LIMITAÇÃO: como sempre, não consigo confirmar visualmente — o
+posicionamento das linhas de mês/ano é calculado a partir da área de
+desenho real do gráfico (useDrawingArea(), não valores fixos "no
+achismo"), mas vale a pena confirmar que não há sobreposição com a
+legenda por baixo, sobretudo em gráficos mais estreitos.
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Major Incs: removida a tabela "Chamadas por Ticket"
+================================================================================
+
+Pedido: eliminar o card "Chamadas por Ticket" da secção Calls.
+
+frontend/src/pages/MajorIncs.jsx: removido o Panel + componente
+CallsTable (ficou sem uso, apagado); "Total de Tempo em Call" passou a
+ocupar a largura toda em vez de dividir a linha com a tabela removida.
+backend/services/major_incs_service.py: removido o cálculo de
+`tabela_rows` e a chave "tabela" do retorno de get_calls_detail (fica
+sem consumidor nenhum, computação morta). Resposta da API confirmada
+sem essa chave (`/api/major-incs` testado via TestClient).
+
+Validado: eslint limpo, `npm run build` com sucesso.
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Major Incs: Despromovidos finalmente com dados reais
+================================================================================
+
+Diagnóstico do utilizador: "Total de Incidentes Tratados/Despromovidos"
+sempre a 0/0. Causa real (não era falta de P1s no período, como eu
+tinha assumido antes): a query só trazia linhas de SLA CRIADAS por
+alguém da equipa — se a linha P1 original de um incidente é criada
+automaticamente (sistema/bot ao abrir o incidente) e só a linha da
+MUDANÇA de prioridade é que é criada por um técnico, a linha P1
+original nunca aparecia no export, e o algoritmo (que precisa de ver a
+task COMEÇAR como P1 — sla_service.get_p1_task_sets) nunca tinha
+material pra detetar nada.
+
+Corrigido: backend/cache.py, _build_despromovidos_url() — adicionado
+"^ORslaLIKEP1^ORslaLIKENível 1" ao MESMO grupo OR da query (não uma
+condição separada em AND): a query passou a trazer QUALQUER linha cuja
+SLA mencione P1/Nível 1 (independente de quem criou) MAIS as linhas
+criadas pela equipa (independente da prioridade) — a união dá as duas
+peças que o algoritmo precisa por task: a linha P1 original (pode ser
+de qualquer autor) + a linha de mudança feita por alguém da equipa
+(objetivo explícito do utilizador: "ver se algum incidente que tinha
+SLA de P1 passou para outra prioridade e quem alterou foi da nossa
+equipa").
+
+Efeito colateral descoberto e corrigido: com a query mais abrangente,
+a maioria dos incidentes despromovidos deixou de ser de origem GCC
+(confirmado: só ~1 em 7 bate em "gcc_abertos", e mesmo esse estava
+Cancelado — corretamente excluído pela regra já existente de excluir
+cancelados de qualquer métrica). Isso deixava "Date"/Geo/Descrição
+sempre em branco e a "Evolução Diária" vazia. Corrigido em
+major_incs_service.py: _incident_detail_rows ganhou um `fallback_dates`
+(a data da 1ª linha de SLA — a P1 original — por task, calculada em
+get_despromovidos_detail via prepared.groupby("task")["start_time"].
+min()), usado quando não há match em GCC Abertos. Canal/Geo/Descrição
+continuam em branco nesse caso (não há fonte alternativa pra esses
+campos), mas a Data (essencial pro gráfico diário) passa a vir sempre
+de algum lado.
+
+Ingerido o novo ficheiro Despromovidos_URL.xls que o utilizador
+colocou em downloads/ (2266 linhas, 128 definições de SLA únicas, 24
+delas mencionando P1/Nível 1 — antes eram 0). Testado com dados reais:
+15 "tratados como P1", 9 "despromovidos" no período May-Aug 2026, com
+datas reais espalhadas por Maio-Julho no gráfico diário (antes: 0/0 e
+gráfico vazio). TestClient revalidado (200 em todos os cenários).
+
+
+ALTERAÇÕES FS — 2026-08-05 (continuação) — Despromovidos: cruzar com SLA3(Incidentes) pra confirmar P1 reais
+================================================================================
+
+Feedback do utilizador (com screenshot da lista de "Tratados Como P1"
+já a mostrar 15 entradas): "está algo mal, o único P1 que existiu foi
+o que temos mapeado na tabela do SLA3". Verificado manualmente: dos 24
+candidatos (15 tratados + 9 despromovidos), só 2 batem em
+"sla3_incidentes" (a tabela do SLA3_URL, `priority=1` — o campo REAL
+de prioridade do incidente).
+
+Causa: a query mais abrangente do Despromovidos_URL (correção
+anterior, "^ORslaLIKEP1^ORslaLIKENível 1") traz qualquer linha cujo
+NOME da SLA mencione "P1"/"Nível 1" — mas o nome de uma SLA é só
+convenção de texto, não o campo real de prioridade. Como o nosso
+recorte de dados é parcial (só linhas criadas pela equipa OU com nome
+P1), a PRIMEIRA linha que vemos pra uma task pode não ser a primeira
+linha REAL da história do incidente — se a linha genuinamente anterior
+(não-P1, não criada pela equipa) não bate no filtro da query, o nosso
+algoritmo vê a linha "P1" como se fosse o início, e classifica errado
+uma task que nunca foi realmente prioridade 1.
+
+Corrigido: major_incs_service.get_despromovidos_detail passou a
+receber também `df_sla3_raw` (tabela "sla3_incidentes", já lida em
+history_service.get_major_incs_summary) e intersecta tratados_tasks/
+bad_tasks com o conjunto de números confirmados lá — só conta quem
+tem confirmação real de ter sido priority=1 nalgum momento. Funciona
+mesmo depois da despromoção porque sla3_incidentes acumula histórico
+via UPSERT incremental (active+backlog), igual ao resto da BD — não é
+só o snapshot "priority=1 agora".
+
+Resultado com dados reais: 15/9 (antes) -> 2/0 (depois) — bate
+EXATAMENTE com a validação manual (2 tratados confirmados: INC0010224,
+INC0010151; 0 despromovidos confirmados). Números mais baixos, mas
+agora confiáveis — cada um tem lastro real no campo de prioridade do
+incidente, não só na convenção de nome da SLA.
+
+TestClient revalidado (200 em todos os cenários).
