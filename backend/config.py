@@ -82,6 +82,22 @@ class Settings:
     # --- CORS ---
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
 
+    # --- URLs de export EXCEL pros Reports (Ibéria/Brasil, CAB, P1 Semanal) ---
+    # Nunca buscadas pelo backend — só devolvidas ao frontend (ver
+    # routers/reports_email.py, GET /api/reports/export-config) pra abrir
+    # com window.open() na sessão de browser do utilizador.
+    REPORTS_P1_SEMANAL_URL = os.getenv("REPORTS_P1_SEMANAL_URL")
+    REPORTS_CAB_OUTAGE_URL = os.getenv("REPORTS_CAB_OUTAGE_URL")
+    REPORTS_CAB_CHANGES_URL = os.getenv("REPORTS_CAB_CHANGES_URL")
+    REPORTS_IB_P1_MATINAL_URL = os.getenv("REPORTS_IB_P1_MATINAL_URL")
+    REPORTS_IB_INCS_DIARIO_URL = os.getenv("REPORTS_IB_INCS_DIARIO_URL")
+    REPORTS_IB_BACKUPS_URL = os.getenv("REPORTS_IB_BACKUPS_URL")
+    REPORTS_IB_BATCHS_URL = os.getenv("REPORTS_IB_BATCHS_URL")
+    REPORTS_BR_P1_MATINAL_URL = os.getenv("REPORTS_BR_P1_MATINAL_URL")
+    REPORTS_BR_INCS_DIARIO_URL = os.getenv("REPORTS_BR_INCS_DIARIO_URL")
+    REPORTS_BR_BACKUPS_URL = os.getenv("REPORTS_BR_BACKUPS_URL")
+    REPORTS_BR_BATCHS_URL = os.getenv("REPORTS_BR_BATCHS_URL")
+
 
 settings = Settings()
 

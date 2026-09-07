@@ -17,6 +17,12 @@ dist/
 # Downloads
 backend/downloads/
 
+# Assets sensíveis de reports (contactos reais, branding) — ver
+# backend/data/reports/README.md
+backend/data/reports/Contactos.xlsx
+backend/data/reports/imgs/*
+!backend/data/reports/imgs/.gitkeep
+
 # Node
 node_modules/
 dist/

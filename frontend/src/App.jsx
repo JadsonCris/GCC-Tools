@@ -1,5 +1,5 @@
 import { lazy, Suspense } from "react";
-import { Routes, Route } from "react-router-dom";
+import { Routes, Route, Navigate } from "react-router-dom";
 
 // Layouts Dedicados
 import MainLayout from "./layouts/MainLayout.jsx";
@@ -19,10 +19,8 @@ const AIOper = lazy(() => import("./pages/AIOper.jsx"));
 const MajorIncs = lazy(() => import("./pages/MajorIncs.jsx"));
 const Turnos = lazy(() => import("./pages/Turnos.jsx"));
 const AdvancedSla = lazy(() => import("./pages/AdvancedSla.jsx"));
-const DashboardReports = lazy(() => import("./pages/DashboardReports.jsx"));
 const Report9Manha = lazy(() => import("./pages/ReportPt.jsx"));
 const CAB = lazy(() => import("./pages/CAB.jsx"));
-const CriticalIncidents = lazy(() => import("./pages/CriticalIncidents.jsx"));
 const ReportP1 = lazy(() => import("./pages/Reports1.jsx"));
 
 function RouteFallback() {
@@ -49,10 +47,9 @@ function App() {
 
         {/* 3. Ecossistema do Dashboard de RELATÓRIOS (Usa o ReportsLayout) */}
         <Route element={<ReportsLayout />}>
-          <Route path="/reports" element={<DashboardReports />} />
+          <Route path="/reports" element={<Navigate to="/reports/report9" replace />} />
           <Route path="/reports/report9" element={<Report9Manha />} />
           <Route path="/reports/cab" element={<CAB />} />
-          <Route path="/reports/critical" element={<CriticalIncidents />} />
           <Route path="/reports/p1" element={<ReportP1 />} />
         </Route>
       </Routes>
