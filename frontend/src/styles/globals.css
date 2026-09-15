@@ -26,3 +26,37 @@ html.dark body {
 html.dark ::-webkit-scrollbar-thumb {
   background: #334155;
 }
+
+/* Input reutilizado pelo Ponto de Situação (EmailRequestForm) — evita
+   repetir a mesma string longa de utilitários em ~8 campos do formulário. */
+@layer components {
+  .field-input-ps {
+    @apply w-full rounded-lg border px-3 py-2 text-xs transition-colors outline-none;
+    @apply bg-white dark:bg-slate-900/60 border-slate-300 dark:border-slate-600;
+    @apply text-slate-800 dark:text-slate-100 placeholder-slate-400;
+  }
+  .field-input-ps:focus {
+    @apply border-blue-500;
+  }
+}
+
+/* ── Splunk Validação — cores portadas da ferramenta original ── */
+:root {
+  --sv-text-muted: #64748b;
+  --sv-edp-green: #059669;
+  --sv-edp-green-hover: #047857;
+  --sv-edp-purple: #7c3aed;
+  --sv-snow-blue: #2563eb;
+  --sv-status-red: #dc2626;
+  --sv-status-orange: #d97706;
+  --sv-panel-bg: #ffffff;
+  --sv-input-bg: #f8fafc;
+  --sv-border: #e2e8f0;
+}
+
+html.dark {
+  --sv-text-muted: #94a3b8;
+  --sv-panel-bg: #0a0f1a;
+  --sv-input-bg: #0d1424;
+  --sv-border: #1e293b;
+}

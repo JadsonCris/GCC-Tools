@@ -8,7 +8,7 @@ import ImportSlotCard from "../components/Reports/ImportSlotCard";
 import ImportedDataTable from "../components/Reports/ImportedDataTable";
 import ManualEntryForm from "../components/Reports/ManualEntryForm";
 import { computeForwardWindow, fmtDtPt, nomeDiaSemanaPt, nomeMesPt } from "../utils/reportsDate";
-import { crossReferenceCabOutage } from "../utils/reportsCab";
+import { crossReferenceCabOutage, normalizeSelectedChange } from "../utils/reportsCab";
 import { getReportsExportConfig, sendCabReport } from "../service/reportsApi";
 
 const sectionLabelClass = "text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-3";
@@ -24,6 +24,8 @@ export default function CAB() {
   const [changesRows, setChangesRows] = useState([]);
   const [changesFile, setChangesFile] = useState("");
   const [manuais, setManuais] = useState([]);
+  const [selectedChangeIdx, setSelectedChangeIdx] = useState(new Set());
+  const [addedChangeIdx, setAddedChangeIdx] = useState(new Set());
   const [resultado, setResultado] = useState([]);
   const [windowLabel, setWindowLabel] = useState("18h hoje – 07h amanhã");
   const [feriadoDias, setFeriadoDias] = useState("");
@@ -94,6 +96,51 @@ export default function CAB() {
     setFeriadoUnlocked(false);
   }
 
+  function handleToggleChangeRow(i) {
+    setSelectedChangeIdx((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }
+
+  function handleToggleAllChanges(checked) {
+    if (!checked) {
+      setSelectedChangeIdx(new Set());
+      return;
+    }
+    setSelectedChangeIdx(new Set(changesRows.map((_, i) => i).filter((i) => !addedChangeIdx.has(i))));
+  }
+
+  // Junta os changes marcados na tabela bruta à mesma lista dos changes
+  // manuais (dedupe por Number) — mesma lógica de
+  // adicionarChangesSelecionadosCAB() no original.
+  function handleAdicionarChangesSelecionados() {
+    if (selectedChangeIdx.size === 0) return;
+    const numerosExistentes = new Set(
+      manuais.map((r) => String(r["Number"] || "").trim().toLowerCase()).filter(Boolean)
+    );
+    const novosManuais = [...manuais];
+    const novosAdicionados = new Set(addedChangeIdx);
+
+    for (const idx of selectedChangeIdx) {
+      const row = changesRows[idx];
+      if (!row) continue;
+      const normalizado = normalizeSelectedChange(row);
+      const numero = String(normalizado["Number"] || "").trim().toLowerCase();
+      if (!numero || !numerosExistentes.has(numero)) {
+        novosManuais.push(normalizado);
+        if (numero) numerosExistentes.add(numero);
+      }
+      novosAdicionados.add(idx);
+    }
+
+    setManuais(novosManuais);
+    setAddedChangeIdx(novosAdicionados);
+    setSelectedChangeIdx(new Set());
+  }
+
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl p-8 border border-slate-200 dark:border-slate-800 space-y-6">
       <div>
@@ -118,7 +165,13 @@ export default function CAB() {
             rows={changesRows}
             fileName={changesFile}
             accent="blue"
-            onImport={(rows, name) => { setChangesRows(rows); setChangesFile(name); }}
+            onImport={(rows, name) => {
+              setChangesRows(rows);
+              setChangesFile(name);
+              // Novo ficheiro: os índices mudam, a seleção anterior deixa de fazer sentido.
+              setSelectedChangeIdx(new Set());
+              setAddedChangeIdx(new Set());
+            }}
           />
         </div>
       </div>
@@ -150,8 +203,30 @@ export default function CAB() {
             <ImportedDataTable rows={outageRows} emptyLabel="Importe o ficheiro de Outage para ver os dados." />
           </div>
           <div className="bg-slate-50 dark:bg-slate-900/60 rounded-xl border border-slate-200 dark:border-slate-800 p-3">
-            <p className="text-xs font-bold text-sky-600 dark:text-sky-300 mb-2">Changes Diários – todos os registos</p>
-            <ImportedDataTable rows={changesRows} emptyLabel="Importe o ficheiro de Changes para ver os dados." />
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <p className="text-xs font-bold text-sky-600 dark:text-sky-300">Changes Diários – todos os registos</p>
+              <button
+                type="button"
+                onClick={handleAdicionarChangesSelecionados}
+                disabled={selectedChangeIdx.size === 0}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 disabled:cursor-not-allowed text-white text-[11px] font-bold px-2.5 py-1 rounded-lg transition-colors"
+              >
+                + Adicionar ao Relatório ({selectedChangeIdx.size})
+              </button>
+            </div>
+            <p className="text-[10px] text-slate-500 dark:text-slate-400 mb-2">
+              Marque a caixa junto de um change para o incluir no relatório mesmo que não caia dentro da janela ou não
+              tenha outage associado — aparece junto com os changes adicionados manualmente.
+            </p>
+            <ImportedDataTable
+              rows={changesRows}
+              emptyLabel="Importe o ficheiro de Changes para ver os dados."
+              selectable
+              selectedIndices={selectedChangeIdx}
+              disabledIndices={addedChangeIdx}
+              onToggleRow={handleToggleChangeRow}
+              onToggleAll={handleToggleAllChanges}
+            />
           </div>
         </div>
       </div>

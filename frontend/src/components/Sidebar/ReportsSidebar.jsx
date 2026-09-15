@@ -3,7 +3,10 @@ import {
   FileText,
   Calendar,
   FileSpreadsheet,
-  ArrowLeft
+  ArrowLeft,
+  Users,
+  UserCog,
+  Radar,
 } from "lucide-react";
 
 // Mesmo padrão visual da sidebar do MainLayout (GCC Dashboard): links de
@@ -34,6 +37,25 @@ function ReportsSidebar() {
           <MenuItem to="/reports/report9" icon={<FileText size={18} />} title="Report Ibéria / Brasil" />
           <MenuItem to="/reports/cab" icon={<Calendar size={18} />} title="Report CAB" />
           <MenuItem to="/reports/p1" icon={<FileSpreadsheet size={18} />} title="Report P1 semanal" />
+
+          <div className="pt-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600 mb-3">
+              Ponto Situação
+            </p>
+            <div className="flex flex-col gap-5">
+              <MenuItem to="/reports/ponto-situacao/equipa" icon={<Users size={18} />} title="Equipa" />
+              <MenuItem to="/reports/ponto-situacao/tl" icon={<UserCog size={18} />} title="TL's" />
+            </div>
+          </div>
+
+          <div className="pt-2">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-slate-600 mb-3">
+              Ferramentas
+            </p>
+            <div className="flex flex-col gap-5">
+              <MenuItem to="/reports/splunk-validacao" icon={<Radar size={18} />} title="Splunk Validação" />
+            </div>
+          </div>
         </nav>
       </div>
 

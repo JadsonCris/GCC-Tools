@@ -604,6 +604,14 @@ def refresh_all():
 
 
 def start_scheduler():
+    if not settings.AUTO_FETCH_ENABLED:
+        logger.warning(
+            "AUTO_FETCH_ENABLED=false — scheduler de busca automática ao ServiceNow NÃO "
+            "iniciado (ver config.py: evita competir com a sessão SSO pessoal no browser "
+            "quando SN_USER não é uma conta de serviço dedicada). O backend serve só o "
+            "que já estiver em dashboard.db + CSVs manuais em backend/downloads/."
+        )
+        return
     scheduler = BackgroundScheduler()
     scheduler.add_job(
         refresh_all, "interval",

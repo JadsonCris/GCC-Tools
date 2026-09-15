@@ -42,6 +42,16 @@ def export_config():
                 "batchs": _slot("Batchs Brasil", settings.REPORTS_BR_BATCHS_URL),
             },
         },
+        "splunkValidacao": {
+            "edpon": _slot("Ficheiro EdpOn", settings.REPORTS_SPLUNKVAL_EDPON_URL),
+            "splunk": _slot("Ficheiro Splunk", settings.REPORTS_SPLUNKVAL_SPLUNK_URL),
+        },
+        "pontoSituacao": {
+            "incsopen": _slot("Incidentes Abertos", settings.REPORTS_PS_INCSOPEN_URL),
+            "userscmdb": _slot("Utilizadores", settings.REPORTS_PS_USERSCMDB_URL),
+            "equipas": _slot("Membros de Equipas", settings.REPORTS_PS_EQUIPAS_URL),
+            "apps": _slot("Aplicações (CMDB)", settings.REPORTS_PS_APPS_URL),
+        },
     }
 
 

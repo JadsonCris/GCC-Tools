@@ -22,6 +22,9 @@ const AdvancedSla = lazy(() => import("./pages/AdvancedSla.jsx"));
 const Report9Manha = lazy(() => import("./pages/ReportPt.jsx"));
 const CAB = lazy(() => import("./pages/CAB.jsx"));
 const ReportP1 = lazy(() => import("./pages/Reports1.jsx"));
+const PontoSituacaoEquipa = lazy(() => import("./pages/PontoSituacaoEquipa.jsx"));
+const PontoSituacaoTL = lazy(() => import("./pages/PontoSituacaoTL.jsx"));
+const SplunkValidacao = lazy(() => import("./pages/SplunkValidacao.jsx"));
 
 function RouteFallback() {
   return <div className="p-8 text-center text-sm text-slate-400 dark:text-slate-500">A carregar...</div>;
@@ -51,6 +54,9 @@ function App() {
           <Route path="/reports/report9" element={<Report9Manha />} />
           <Route path="/reports/cab" element={<CAB />} />
           <Route path="/reports/p1" element={<ReportP1 />} />
+          <Route path="/reports/ponto-situacao/equipa" element={<PontoSituacaoEquipa />} />
+          <Route path="/reports/ponto-situacao/tl" element={<PontoSituacaoTL />} />
+          <Route path="/reports/splunk-validacao" element={<SplunkValidacao />} />
         </Route>
       </Routes>
     </Suspense>

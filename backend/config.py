@@ -78,6 +78,14 @@ class Settings:
 
     # --- Cache ---
     CACHE_REFRESH_MINUTES = int(os.getenv("CACHE_REFRESH_MINUTES", "20"))
+    # Desliga o scheduler de busca automática ao ServiceNow (cache.py).
+    # IMPORTANTE: se SN_USER for uma conta PESSOAL (não uma conta de
+    # serviço dedicada), as tentativas periódicas de Basic Auth competem
+    # com a tua própria sessão SSO no browser — confirmado causar logout
+    # forçado (SAML Single Logout) do ServiceNow. Fica desligado por
+    # default até haver uma conta de serviço; o dashboard continua a
+    # funcionar via CSVs manuais em backend/downloads/.
+    AUTO_FETCH_ENABLED = os.getenv("AUTO_FETCH_ENABLED", "false").lower() == "true"
 
     # --- CORS ---
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
@@ -97,6 +105,12 @@ class Settings:
     REPORTS_BR_INCS_DIARIO_URL = os.getenv("REPORTS_BR_INCS_DIARIO_URL")
     REPORTS_BR_BACKUPS_URL = os.getenv("REPORTS_BR_BACKUPS_URL")
     REPORTS_BR_BATCHS_URL = os.getenv("REPORTS_BR_BATCHS_URL")
+    REPORTS_SPLUNKVAL_EDPON_URL = os.getenv("REPORTS_SPLUNKVAL_EDPON_URL")
+    REPORTS_SPLUNKVAL_SPLUNK_URL = os.getenv("REPORTS_SPLUNKVAL_SPLUNK_URL")
+    REPORTS_PS_INCSOPEN_URL = os.getenv("REPORTS_PS_INCSOPEN_URL")
+    REPORTS_PS_USERSCMDB_URL = os.getenv("REPORTS_PS_USERSCMDB_URL")
+    REPORTS_PS_EQUIPAS_URL = os.getenv("REPORTS_PS_EQUIPAS_URL")
+    REPORTS_PS_APPS_URL = os.getenv("REPORTS_PS_APPS_URL")
 
 
 settings = Settings()

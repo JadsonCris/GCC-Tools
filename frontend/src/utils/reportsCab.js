@@ -55,3 +55,34 @@ export function crossReferenceCabOutage(outageRows, changesRows, { start: window
 
   return { changesFiltrados, resultado };
 }
+
+// Procura um campo pelo nome, tentando primeiro correspondência exata
+// (ignorando maiúsculas/espaços) e só depois parcial — mesma lógica de
+// extrairCampoCAB() no original.
+function extrairCampo(row, candidatos) {
+  const chaves = Object.keys(row);
+  for (const cand of candidatos) {
+    const key = chaves.find((k) => k.trim().toLowerCase() === cand.toLowerCase());
+    if (key) return row[key];
+  }
+  for (const cand of candidatos) {
+    const key = chaves.find((k) => k.toLowerCase().includes(cand.toLowerCase()));
+    if (key) return row[key];
+  }
+  return "";
+}
+
+// Normaliza uma linha de Changes (colunas do export ServiceNow) para o
+// mesmo formato usado pelos changes adicionados manualmente, pra
+// aparecerem juntos na mesma lista (normalizarChangeSelecionadoCAB no
+// original) — usado quando o utilizador marca changes na tabela bruta
+// em vez de os escrever à mão.
+export function normalizeSelectedChange(row) {
+  return {
+    Number: extrairCampo(row, ["Number"]),
+    "Configuration item": extrairCampo(row, ["Configuration item", "cmdb_ci", "CI"]),
+    "Short description": extrairCampo(row, ["Short description", "Description"]),
+    "Unavailability Start Date": extrairCampo(row, ["Planned start date", "Start date", "Unavailability Start Date"]),
+    "Unavailability End Date": extrairCampo(row, ["Planned end date", "End date", "Unavailability End Date"]),
+  };
+}
