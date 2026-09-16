@@ -36,8 +36,6 @@ import pandas as pd
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from config import settings
-from services import team_service
-from services.servicenow_client import ServiceNowFetchError, _parse_csv_text, fetch_csv
 
 logger = logging.getLogger("cache")
 
@@ -45,43 +43,66 @@ BASE_DIR = Path(__file__).resolve().parent
 DB_PATH = BASE_DIR / "dashboard.db"
 DOWNLOADS_DIR = BASE_DIR / "downloads"
 
-# Conta de automação (bot AIOPS) incluída sempre na busca de Despromovidos,
-# além dos operadores reais — pedido explícito do utilizador, já que o bot
-# também abre/trata P1s e deve entrar na mesma análise.
-DESPROMOVIDOS_EXTRA_USERNAMES = ("SAAIOPSP14",)
+from services.servicenow_client import ServiceNowFetchError, _parse_csv_text, fetch_csv  # noqa: E402
+
+
+def _all_known_p1_numbers() -> list[str]:
+    """
+    Todos os números de incidente que "sla3_incidentes" (SLA3_URL,
+    `priority=1`) já viu alguma vez — active (ainda é P1) + backlog (já
+    foi P1, não é mais) — graças ao UPSERT incremental. Base pra montar
+    o Despromovidos_URL diretamente pelos incidentes que interessam (ver
+    _build_despromovidos_url), em vez de filtrar por quem criou a linha
+    de SLA. Lê a BD tal como está NESTE momento — se este ciclo ainda
+    não gravou "sla3_incidentes" (é buscada antes de "despromovidos" no
+    SERVICENOW_URLS, mas só fica gravada depois, em _store_and_clean_
+    csvs), usa a foto do ciclo anterior; um P1 novíssimo só entra no
+    Despromovidos_URL a partir do próximo ciclo — atraso de um ciclo,
+    sem impacto real (mesma categoria de latência já aceite noutros
+    sítios desta app).
+    """
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        cur = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='sla3_incidentes'")
+        if cur.fetchone() is None:
+            return []
+        rows = conn.execute('SELECT DISTINCT "Number" FROM sla3_incidentes WHERE "Number" IS NOT NULL').fetchall()
+    finally:
+        conn.close()
+    return sorted(r[0] for r in rows)
 
 
 def _build_despromovidos_url() -> str | None:
     """
     Monta a URL do Despromovidos_URL (task_sla_list.do) DINAMICAMENTE a
-    partir de team_service.USUARIOS + DESPROMOVIDOS_EXTRA_USERNAMES, em
-    vez de uma URL fixa no .env — pedido explícito do utilizador pra que
-    um operador novo entre automaticamente (só precisa ser adicionado a
-    USUARIOS, sem editar nenhuma URL à mão). Mesmos sysparm_fields do
-    SLA4_URL (schema idêntico — ver services/sla_service.py
-    prepare_sla_rows, reaproveitado aqui).
+    partir de _all_known_p1_numbers() (histórico completo de
+    sla3_incidentes), em vez de uma URL fixa no .env. Mesmos
+    sysparm_fields do SLA4_URL (schema idêntico — ver services/
+    sla_service.py prepare_sla_rows, reaproveitado aqui).
 
-    RESOLVIDO 2026-08: o filtro original só trazia linhas de SLA
-    CRIADAS por alguém da equipa — se a linha de SLA original P1 de um
-    incidente foi criada automaticamente (sistema/bot) e só a linha de
-    despromoção (mudança de prioridade) foi criada por um técnico, a
-    linha P1 original nunca vinha no export, e o algoritmo (que precisa
-    de ver a task começar como P1 — ver sla_service.get_p1_task_sets)
-    nunca detetava nada (sempre 0/0). Corrigido adicionando `^ORsla
-    LIKEP1^ORslaLIKENível 1` ao MESMO grupo OR — a query passa a trazer
-    QUALQUER linha cuja SLA mencione P1/Nível 1 (independente de quem
-    criou), MAIS as linhas criadas pela equipa (independente da
-    prioridade) — a união dá as duas peças que o algoritmo precisa por
-    task: a linha P1 original + a linha de mudança feita pela equipa.
+    Usado só pra ANOTAR, na página "Major Incs", pra que prioridade cada
+    despromovido efetivamente desceu (P2/P3/P4 — ver major_incs_service.
+    get_despromovidos_detail); a CLASSIFICAÇÃO "é ou não despromovido"
+    já não depende disto, vem do "_status" da própria sla3_incidentes.
+
+    RESOLVIDO 2026-08 (versão anterior, substituída 2026-09): filtrava
+    por `sys_created_by=<equipa>^ORslaLIKEP1^ORslaLIKENível 1` — dava só
+    uma vista PARCIAL da história de cada task (linhas de SLA de
+    prioridades intermédias, criadas por quem não é da equipa e cujo
+    nome não menciona "P1"/"Nível 1", ficavam invisíveis). Caso real
+    confirmado: INC0055713 tinha 5 linhas de SLA reais, o filtro antigo
+    só via 3 — dava falso positivo de despromoção. Filtrar por
+    `task.numberIN<...>` com os números que sla3_incidentes já confirma
+    como P1 dá a história COMPLETA de cada task, sem depender de quem
+    criou a linha nem de convenção de texto no nome da SLA.
     """
-    usernames = list(team_service.USUARIOS.keys()) + list(DESPROMOVIDOS_EXTRA_USERNAMES)
-    if not usernames:
+    numbers = _all_known_p1_numbers()
+    if not numbers:
         return None
-    ex_filter = "^OR".join(f"sys_created_by={u}" for u in usernames)
-    sla_filter = "^ORslaLIKEP1^ORslaLIKENível 1"
+    number_filter = ",".join(numbers)
     return (
         "https://edpon.service-now.com/task_sla_list.do?EXCEL"
-        f"&sysparm_query=task.sys_class_name=incident^{ex_filter}{sla_filter}"
+        f"&sysparm_query=task.sys_class_name=incident^task.numberIN{number_filter}"
         "&sysparm_fields=task,sys_created_on,sla,sla.type,stage,start_time,end_time,"
         "business_duration,business_percentage,active,schedule,sys_created_by"
     )
@@ -132,6 +153,12 @@ def _build_filename_candidates() -> dict[str, list[str]]:
             "Despromovidos_URL.xls",
             "despromovidos.xls",
         ],
+        # task_ci_list.do — Configuration Items associados a incidentes.
+        "cis": [
+            settings.SN_FILENAME_CI,
+            "CI_URL.xls",
+            "cis.xls",
+        ],
         # SharePoint (.xlsm), não ServiceNow — só via download manual (ver
         # SERVICENOW_URLS abaixo, sem URL de busca automática).
         "justificacoes": [
@@ -165,6 +192,7 @@ SERVICENOW_URLS = {
     "ok_": lambda: settings.OK_URL,
     "incs_calls_gcc": lambda: settings.INCS_CALLS_GCC_URL,
     "despromovidos": _build_despromovidos_url,  # dinâmica — ver função acima
+    "cis": lambda: settings.CI_URL,
     # Sempre None: JUSTIFICACOES_URL é SharePoint, não ServiceNow — a auth
     # de SN_USER/SN_PASS não serve pra isso, então nem tenta a busca
     # automática (iria só devolver a página de login em HTML). Cai direto
@@ -193,6 +221,11 @@ TABLE_KEYS: dict[str, tuple[str, ...]] = {
     "ok_": ("Title",),
     "incs_calls_gcc": ("Number",),
     "despromovidos": ("Task", "Start time"),
+    # CONFIRMADO no primeiro fetch real (backend/downloads/CI_URL.xls):
+    # cabeçalhos reais são "Task", "Configuration Item" (I maiúsculo),
+    # "Class", "Created by", "Created" — só "Configuration Item" difere
+    # do que se assumiu inicialmente (tinha "item" minúsculo).
+    "cis": ("Task", "Configuration Item"),
 }
 
 CACHE: dict = {"errors": {}, "last_updated": None}
@@ -262,7 +295,15 @@ def fetch_and_download_csvs() -> tuple[dict, dict]:
     errors: dict = {}
 
     for table_name, url_getter in SERVICENOW_URLS.items():
-        url = url_getter()
+        raw_url = url_getter()
+        # AUTO_FETCH_ENABLED=false desliga QUALQUER tentativa de contactar o
+        # ServiceNow (mesmo com URL configurada) — não só o scheduler
+        # periódico (ver start_scheduler). Sem isto, uma chamada direta a
+        # fetch_and_download_csvs() com a flag desligada ainda tentava Basic
+        # Auth com SN_USER/SN_PASS, o que é exatamente o que a flag existe
+        # para evitar quando SN_USER é uma conta pessoal (risco de logout
+        # forçado da sessão SSO — ver config.py).
+        url = raw_url if settings.AUTO_FETCH_ENABLED else None
         auto_error = None
 
         if url:
@@ -280,6 +321,12 @@ def fetch_and_download_csvs() -> tuple[dict, dict]:
             except Exception as exc:  # noqa: BLE001
                 logger.exception("Erro inesperado ao baixar '%s'", table_name)
                 auto_error = str(exc)
+        elif raw_url:
+            logger.info(
+                "AUTO_FETCH_ENABLED=false — a saltar a busca automática de '%s' "
+                "(evita competir com a sessão SSO pessoal no ServiceNow); só tenta CSV manual.",
+                table_name,
+            )
         else:
             logger.warning("URL para '%s' não definida no .env — só tenta CSV manual.", table_name)
 
@@ -556,12 +603,109 @@ def _store_and_clean_csvs(dfs: dict) -> dict:
 # backlog: tabela desativada (ver _build_filename_candidates/
 # SERVICENOW_URLS — sem link novo configurado ainda), então nunca aparece
 # em `dfs`. Erro fixo em vez de recalcular (ver nota de otimização em
-# refresh_all abaixo). "despromovidos" DEIXOU de estar aqui (2026-08):
-# ativada com URL dinâmica (ver _build_despromovidos_url) — agora lida
-# pelo history_service.py/major_incs_service.py, não mais por este CACHE.
+# refresh_all abaixo). "despromovidos_summary" nunca mais é escrito em
+# CACHE desde 2026-08 (ver refresh_all) — o dado real agora vive em
+# history_service.py/major_incs_service.py (GET /api/major-incs). O
+# endpoint antigo GET /analytics/despromovidos (routers/analytics.py,
+# usado só pela página legada /reports/advanced-sla) ficou sem fonte,
+# devolvendo sempre 503 "cache ainda não populado" — mensagem enganosa
+# (soa a falha transitória, quando na verdade é permanente). Erro fixo
+# aqui só pra dar um motivo real em vez desse.
 _DISABLED_TABLE_ERRORS = {
     "backlog_summary": "CSVs de backlog indisponíveis (tabela desativada, sem link configurado).",
+    "despromovidos_summary": (
+        "Endpoint descontinuado — Despromovidos agora é servido por GET /api/major-incs."
+    ),
 }
+
+
+def importable_table_names() -> list[str]:
+    """
+    Tabelas que esta app sabe processar (mesmo conjunto de TABLE_KEYS +
+    REPLACE_TABLE_SAVERS) — usado pelo seletor de tabela do upload manual
+    em "Base de Dados" (ver ingest_manual_upload). Independente de a
+    tabela já ter dado gravado na BD (ex: "despromovidos" pode nunca ter
+    sido buscada com sucesso ainda, mas continua sendo uma tabela válida
+    pra carregar à mão).
+    """
+    return sorted(set(TABLE_KEYS) | set(REPLACE_TABLE_SAVERS))
+
+
+def importable_tables_with_download_urls() -> list[dict]:
+    """
+    Mesma lista de importable_table_names(), cada tabela com o link de
+    download direto do ServiceNow quando existir — a MESMA URL/
+    sysparm_fields já usados pela busca automática (SERVICENOW_URLS),
+    pra garantir que um download manual feito por aqui traz sempre as
+    colunas certas.
+
+    RESOLVIDO (bug real, 2026-09-16): um utilizador exportou a lista de
+    incidentes diretamente do ServiceNow à mão, mas a partir doutra
+    vista/layout de colunas — o ficheiro não tinha "Event first
+    occurrence" nem "Channel" (o PRINCIPAL_URL pede-os explicitamente no
+    sysparm_fields, aquela vista não). Como o UPSERT só grava as colunas
+    que vierem no ficheiro, os incidentes NOVOS trazidos por aquele
+    upload entraram com esses dois campos vazios — não porque o
+    ServiceNow não tivesse o dado, só porque aquele export não o pedia.
+    Dar aqui o link exato (que o utilizador só tem de abrir no browser já
+    autenticado e descarregar) elimina essa classe de erro à nascença.
+
+    Tabelas do SharePoint (justificacoes/calls) não têm URL de
+    ServiceNow — SERVICENOW_URLS devolve None pra elas, e o frontend
+    esconde o botão de download nesse caso (têm de ser descarregadas à
+    mão do SharePoint mesmo).
+    """
+    result = []
+    for name in importable_table_names():
+        url_getter = SERVICENOW_URLS.get(name)
+        url = None
+        if url_getter:
+            try:
+                url = url_getter()
+            except Exception:  # noqa: BLE001
+                logger.exception("Falha ao montar a URL de download de '%s'.", name)
+        result.append({"table": name, "download_url": url})
+    return result
+
+
+def ingest_manual_upload(table_name: str, filename: str, content: bytes) -> dict:
+    """
+    Upload manual via UI ("Base de Dados" > Carregar Tabela Manualmente),
+    pedido do utilizador: o caminho manual que já existia (colocar o
+    ficheiro em downloads/ e esperar o próximo ciclo do scheduler, até
+    CACHE_REFRESH_MINUTES depois) só alimentava a BD indiretamente, sem
+    confirmação nenhuma pra quem carregou. Aqui o ficheiro é lido e
+    gravado no SQLite NA HORA, reaproveitando exatamente o mesmo
+    `_read_csv_file`/`_store_and_clean_csvs` do ciclo automático — mesmo
+    tratamento de sheet/encoding/UPSERT incremental (ou substituição
+    total, pras tabelas do SharePoint), zero lógica de parsing nova.
+
+    `table_name` é revalidado contra `importable_table_names()` (defesa
+    contra criar uma tabela desconhecida a partir de um nome arbitrário
+    vindo do pedido). Levanta ValueError (nome inválido) ou
+    ServiceNowFetchError (ficheiro ilegível ou sem as colunas esperadas
+    pela tabela) — o router traduz cada um num HTTP apropriado.
+    """
+    known_tables = importable_table_names()
+    if table_name not in known_tables:
+        raise ValueError(f"Tabela '{table_name}' não é importável (válidas: {', '.join(known_tables)}).")
+
+    suffix = Path(filename or "").suffix.lower() or ".xls"
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    tmp_path = DOWNLOADS_DIR / f"_upload_{table_name}{suffix}"
+    tmp_path.write_bytes(content)
+    try:
+        df = _read_csv_file(tmp_path, sheet_name=SHEET_NAMES.get(table_name))
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    errors = _store_and_clean_csvs({table_name: df})
+    if table_name in errors:
+        raise ServiceNowFetchError(errors[table_name])
+
+    CACHE["last_updated"] = datetime.now().isoformat()
+    logger.info("'%s' carregado manualmente via upload (%d linhas) e gravado no SQLite.", table_name, len(df))
+    return {"table": table_name, "rows": len(df)}
 
 
 def refresh_all():
@@ -604,14 +748,26 @@ def refresh_all():
 
 
 def start_scheduler():
+    """
+    RESOLVIDO: antes, com AUTO_FETCH_ENABLED=false, esta função devolvia
+    logo a seguir sem nunca chamar refresh_all() nem uma vez — o que
+    contradizia o que config.py/README prometem ("o dashboard continua a
+    funcionar via CSVs manuais em backend/downloads/"): esse caminho
+    manual vive dentro de fetch_and_download_csvs(), chamada só por
+    refresh_all(), então nunca corria, e ficheiros colocados em
+    downloads/ eram ignorados para sempre. A proteção real contra
+    contactar o ServiceNow com uma conta pessoal já está garantida dentro
+    de fetch_and_download_csvs() (ver ali) — aqui o scheduler pode e deve
+    correr sempre, só para detetar/gravar CSVs manuais.
+    """
     if not settings.AUTO_FETCH_ENABLED:
         logger.warning(
-            "AUTO_FETCH_ENABLED=false — scheduler de busca automática ao ServiceNow NÃO "
-            "iniciado (ver config.py: evita competir com a sessão SSO pessoal no browser "
-            "quando SN_USER não é uma conta de serviço dedicada). O backend serve só o "
-            "que já estiver em dashboard.db + CSVs manuais em backend/downloads/."
+            "AUTO_FETCH_ENABLED=false — a busca automática ao ServiceNow (Basic Auth) fica "
+            "desligada (ver config.py: evita competir com a sessão SSO pessoal no browser "
+            "quando SN_USER não é uma conta de serviço dedicada). O scheduler continua a "
+            "correr só para detetar CSVs/Excel manuais em backend/downloads/ e gravá-los "
+            "no dashboard.db — sem tocar no ServiceNow."
         )
-        return
     scheduler = BackgroundScheduler()
     scheduler.add_job(
         refresh_all, "interval",
@@ -620,4 +776,8 @@ def start_scheduler():
     )
     threading.Thread(target=refresh_all, daemon=True, name="initial-refresh").start()
     scheduler.start()
-    logger.info("Scheduler iniciado — ciclos a cada %d min.", settings.CACHE_REFRESH_MINUTES)
+    logger.info(
+        "Scheduler iniciado — ciclos a cada %d min (busca automática ao ServiceNow: %s).",
+        settings.CACHE_REFRESH_MINUTES,
+        "ativa" if settings.AUTO_FETCH_ENABLED else "desativada, só CSVs manuais",
+    )

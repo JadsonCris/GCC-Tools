@@ -58,7 +58,7 @@ export default function ReferenceDataPanel({ exportConfig }) {
   const [fileNamePorTabela, setFileNamePorTabela] = useState({});
   const queryClient = useQueryClient();
 
-  const { data: status } = useQuery({
+  const { data: status, isError: isStatusError } = useQuery({
     queryKey: ["ponto-situacao-status"],
     queryFn: getStatus,
     refetchOnWindowFocus: false,
@@ -99,11 +99,18 @@ export default function ReferenceDataPanel({ exportConfig }) {
     }
   }
 
+  // RESOLVIDO (bug real): sem isError, uma falha a buscar o estado caía
+  // no `?? 0` de cada tabela e mostrava "Incidentes: 0 · Utilizadores: 0
+  // · ... — base ainda não atualizada" — indistinguível de "nunca se
+  // importou nada". Um admin podia achar que as tabelas de referência
+  // estavam mesmo vazias e reimportar exports grandes à toa.
   const partes = SLOTS.map((s) => `${NOMES_TABELAS[s.tabela]}: ${status?.[s.tabela]?.linhas ?? 0}`);
   const maisRecente = SLOTS.map((s) => status?.[s.tabela]?.atualizado_em).filter(Boolean).sort().at(-1);
-  const resumo = `Dados de referência (locais) — ${partes.join(" · ")}${
-    maisRecente ? ` — base atualizada em ${formatarDataHora(maisRecente)}` : " — base ainda não atualizada"
-  }`;
+  const resumo = isStatusError
+    ? "Dados de referência (locais) — erro ao carregar o estado atual, tenta recarregar a página."
+    : `Dados de referência (locais) — ${partes.join(" · ")}${
+        maisRecente ? ` — base atualizada em ${formatarDataHora(maisRecente)}` : " — base ainda não atualizada"
+      }`;
 
   return (
     <div className="mb-6">

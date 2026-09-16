@@ -4,8 +4,11 @@ Recebe o DataFrame de sys_report_template já enriquecido (via
 transform.enrich_sys_report_template) e calcula KPIs/gráficos. Quem
 baixa e enriquece é o cache.py, uma vez por ciclo.
 """
+import re
+
 import pandas as pd
 
+from . import team_service
 from .keywords import TOOL_COLORS, TOOL_COLORS_AI
 
 PRIORITY_LABELS = {"1": "Critical", "2": "High", "3": "Moderate", "4": "Low"}
@@ -209,6 +212,131 @@ def get_source_by_day(df: pd.DataFrame) -> dict:
         "day_totals": day_totals,
         "grand_total": int(row_totals.sum()),
     }
+
+
+def get_incidents_list(
+    df: pd.DataFrame, raw_ok_matched: pd.DataFrame | None, cis_matched: pd.DataFrame | None
+) -> list[dict]:
+    """
+    Uma linha por incidente do período: quem abriu (df/"Técnico"), quem
+    resolveu (primeira tag OK_GCC feita por alguém, tabela "ok_"), nº de
+    CI's anexados e timestamp do mais recente (tabela "cis") — réplica de
+    "Lista de Incidentes" ("Lista CI's" no protótipo v20). Devolve uma
+    lista de dicts pronta pra JSON, mais recente primeiro — o frontend
+    filtra/ordena/exporta localmente (mesmo padrão de
+    get_incidents_by_sla_status/IncidentsStatusModal.jsx).
+    """
+    if df.empty:
+        return []
+
+    resolver_map: dict[str, str] = {}
+    if raw_ok_matched is not None and not raw_ok_matched.empty and "Title" in raw_ok_matched.columns:
+        ok_df = raw_ok_matched.copy()
+        if "Label" in ok_df.columns:
+            ok_df = ok_df[ok_df["Label"] == "OK_GCC"]
+        incidentes = ok_df["Title"].astype(str).str.extract(r"(INC\d+)", expand=False)
+        tecnicos = ok_df["Created by"].apply(team_service.username_to_tecnico)
+        for inc, tecnico in zip(incidentes, tecnicos):
+            if inc and inc not in resolver_map:
+                resolver_map[inc] = tecnico
+
+    ci_count: dict[str, int] = {}
+    ci_latest: dict[str, pd.Timestamp] = {}
+    if cis_matched is not None and not cis_matched.empty:
+        ci_count = cis_matched.groupby("incidente").size().to_dict()
+        ci_latest = cis_matched.groupby("incidente")["created_at"].max().to_dict()
+
+    subset = df[df["Incidente"].notna()].copy()
+    subset["_opened_at_fmt"] = subset["opened_at"].dt.strftime("%Y-%m-%d %H:%M")
+    subset["_opener"] = subset["Técnico"].apply(team_service.normalize_bot_name) if "Técnico" in subset.columns else ""
+    if "short_description" not in subset.columns:
+        subset["short_description"] = None
+
+    # RESOLVIDO (otimização 2026-09-16): to_dict(orient="records") sobre o
+    # DataFrame inteiro (~30 colunas do enrich) boxava toda coluna de toda
+    # linha só pra ler 5 delas por baixo — restringir às colunas
+    # realmente lidas no loop reduz o trabalho de boxing na mesma
+    # proporção (medido: maior parte do tempo desta função nesse to_dict).
+    cols = ["Incidente", "opened_at", "_opened_at_fmt", "short_description", "_opener"]
+    rows = []
+    for rec in subset[cols].to_dict(orient="records"):
+        inc = rec["Incidente"]
+        latest_ci = ci_latest.get(inc)
+        rows.append({
+            "number": inc,
+            "opened_at": rec["_opened_at_fmt"] if pd.notna(rec["opened_at"]) else None,
+            "short_description": rec.get("short_description") or "",
+            "opener": rec.get("_opener") or "",
+            "resolver": resolver_map.get(inc, ""),
+            "ci_count": int(ci_count.get(inc, 0)),
+            "latest_ci_at": latest_ci.strftime("%Y-%m-%d %H:%M") if pd.notna(latest_ci) else None,
+        })
+    rows.sort(key=lambda r: r["opened_at"] or "", reverse=True)
+    return rows
+
+
+def _two_level_pivot(df: pd.DataFrame, level1_col: str, level2_col: str, level1_sort_key=None) -> dict:
+    """
+    Pivot genérico Nível1 > Nível2 (colapsável no frontend) x mês de
+    abertura -> contagem — usado por get_priority_source_pivot/
+    get_source_priority_pivot ("Incidentes Abertos por Prioridade"/"por
+    Source" de Central Operacional). Incidentes sem Source (Grupo ==
+    "Monitorização") ficam de fora — mesma exclusão de get_source_by_day,
+    já que "Source" não existe pra eles.
+    """
+    subset = df[df[level1_col].notna() & df[level2_col].notna() & df["opened_at"].notna()].copy()
+    if subset.empty:
+        return {"months": [], "rows": [], "month_totals": {}, "grand_total": 0}
+
+    subset["_month"] = subset["opened_at"].dt.strftime("%Y-%m")
+    months = sorted(subset["_month"].unique())
+
+    rows = []
+    for level1_val, group in subset.groupby(level1_col):
+        by_month = group.groupby("_month").size()
+        children = []
+        for level2_val, sub in group.groupby(level2_col):
+            sub_by_month = sub.groupby("_month").size()
+            children.append({
+                "label": level2_val,
+                "total": int(sub_by_month.sum()),
+                "by_month": {m: int(sub_by_month.get(m, 0)) for m in months},
+            })
+        children.sort(key=lambda c: c["total"], reverse=True)
+        rows.append({
+            "label": level1_val,
+            "total": int(by_month.sum()),
+            "by_month": {m: int(by_month.get(m, 0)) for m in months},
+            "children": children,
+        })
+    rows.sort(key=level1_sort_key or (lambda r: -r["total"]))
+
+    month_totals = subset.groupby("_month").size()
+    return {
+        "months": months,
+        "rows": rows,
+        "month_totals": {m: int(month_totals.get(m, 0)) for m in months},
+        "grand_total": int(len(subset)),
+    }
+
+
+def _priority_sort_key(row: dict):
+    """"1 - Critical" -> 1, "2 - High" -> 2, etc. — ordena pela severidade,
+    não por volume (ao contrário do default de _two_level_pivot)."""
+    m = re.match(r"\s*(\d)", str(row["label"]))
+    return int(m.group(1)) if m else 99
+
+
+def get_priority_source_pivot(df: pd.DataFrame) -> dict:
+    """"Incidentes Abertos por Prioridade" — Prioridade (nível 1, ordem
+    Critical > High > Moderate > Low) > Source (nível 2) x mês."""
+    return _two_level_pivot(df, "priority", "Source", level1_sort_key=_priority_sort_key)
+
+
+def get_source_priority_pivot(df: pd.DataFrame) -> dict:
+    """"Incidentes Abertos por Source" — Source (nível 1, por volume) >
+    Prioridade (nível 2) x mês."""
+    return _two_level_pivot(df, "Source", "priority")
 
 
 def get_aioper_summary(df: pd.DataFrame) -> dict:

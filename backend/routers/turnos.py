@@ -1,10 +1,11 @@
 # routers/turnos.py
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from services import turnos_service
+from services import auth_service, turnos_service
 
-router = APIRouter(prefix="/turnos", tags=["turnos"])
+# View "Gestão de Turnos" — só admins (ver services/auth_service.py).
+router = APIRouter(prefix="/turnos", tags=["turnos"], dependencies=[Depends(auth_service.require_admin)])
 
 
 class EmployeeCreate(BaseModel):
@@ -43,20 +44,29 @@ def post_employee(payload: EmployeeCreate):
 
 @router.patch("/employees/{employee_id}")
 def patch_employee(employee_id: int, payload: EmployeeUpdate):
-    turnos_service.update_employee(employee_id, name=payload.name, pos=payload.pos, hidden=payload.hidden)
-    return {"ok": True}
+    try:
+        turnos_service.update_employee(employee_id, name=payload.name, pos=payload.pos, hidden=payload.hidden)
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao atualizar colaborador: {exc}") from exc
 
 
 @router.delete("/employees/{employee_id}")
 def delete_employee(employee_id: int):
-    turnos_service.delete_employee(employee_id)
-    return {"ok": True}
+    try:
+        turnos_service.delete_employee(employee_id)
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao remover colaborador: {exc}") from exc
 
 
 @router.get("/shifts")
 def get_shifts(year: int):
     """Turnos do ano inteiro, todos os colaboradores — {employee_id: {"YYYY-MM-DD": shift}}."""
-    return turnos_service.get_shifts_for_year(year)
+    try:
+        return turnos_service.get_shifts_for_year(year)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao ler turnos do ano: {exc}") from exc
 
 
 @router.put("/employees/{employee_id}/shifts")
@@ -71,5 +81,8 @@ def put_month_shifts(employee_id: int, payload: MonthShiftsPayload):
 
 @router.post("/clear-month")
 def clear_month(payload: ClearMonthPayload):
-    turnos_service.clear_month(payload.year, payload.month)
-    return {"ok": True}
+    try:
+        turnos_service.clear_month(payload.year, payload.month)
+        return {"ok": True}
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao limpar o mês: {exc}") from exc

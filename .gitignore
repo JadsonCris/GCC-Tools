@@ -2,6 +2,9 @@
 __pycache__/
 *.pyc
 
+# Ambiente virtual (recria com: pip install -r backend/requirements.txt)
+venv/
+
 # Ambiente
 frontend/.env
 backend/.env

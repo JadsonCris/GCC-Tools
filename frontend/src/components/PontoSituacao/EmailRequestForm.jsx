@@ -74,8 +74,14 @@ export default function EmailRequestForm({ vista }) {
         applyComputed("comentario", data.comentario || "");
         setIncs(data.incs || "");
         setOutros(data.outros || []);
-      } catch {
-        setFeedback({ type: "error", message: "Servidor offline." });
+      } catch (err) {
+        // RESOLVIDO (bug real): mostrava sempre "Servidor offline", mesmo
+        // quando o backend respondia com um erro de validação real (ex:
+        // "grupo não encontrado", incidente malformado) — enganava o
+        // utilizador a pensar que o servidor estava em baixo quando na
+        // verdade a resposta já tinha o motivo certo. Mesma extração já
+        // usada em handleGerarEmail, abaixo.
+        setFeedback({ type: "error", message: err.response?.data?.detail || err.message });
       }
     }, 400);
     return () => clearTimeout(timer);

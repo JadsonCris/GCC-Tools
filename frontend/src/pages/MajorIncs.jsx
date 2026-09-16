@@ -4,12 +4,15 @@
 // original), consumindo o histórico real na BD em vez de ficheiros
 // carregados à mão. Ver backend/services/major_incs_service.py pra
 // definição exata de cada métrica.
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getMajorIncs } from "../service/dashboardApi";
 import { useDateRange } from "../context/DateRangeContext.jsx";
 import DateRangeFilter from "../components/Filters/DateRangeFilter";
+import GranularityToggle from "../components/Filters/GranularityToggle";
 import TrendChart from "../components/Charts/TrendChart";
 import SimplePieChart from "../components/Charts/SimplePieChart";
+import { aggregateByGranularity } from "../utils/trendGranularity";
 
 // Mesma paleta usada no backend (major_incs_service.CALL_CATEGORY_COLORS)
 // — "Change"/"Problem" aparecem no pie de Prioridade porque esses
@@ -36,10 +39,13 @@ function Kpi({ label, value, color }) {
   );
 }
 
-function Panel({ title, subtitle, children }) {
+function Panel({ title, subtitle, actions, children }) {
   return (
     <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
-      <h3 className="text-slate-800 dark:text-white font-semibold">{title}</h3>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <h3 className="text-slate-800 dark:text-white font-semibold">{title}</h3>
+        {actions}
+      </div>
       {subtitle && <p className="text-xs text-slate-400 dark:text-slate-500 mt-1 mb-4">{subtitle}</p>}
       {!subtitle && <div className="mb-4" />}
       {children}
@@ -93,6 +99,14 @@ export default function MajorIncs() {
   const desp = data?.despromovidos;
   const calls = data?.calls;
 
+  // Dia/Mês/Ano por gráfico (ver utils/trendGranularity) — o backend
+  // manda sempre por dia, sem buracos (todo dia do período, mesmo sem
+  // dado — ver major_incs_service._all_days_between); agregar pra
+  // mês/ano é só somar essa série já contínua, feito aqui no frontend.
+  const [despGranularity, setDespGranularity] = useState("mes");
+  const [callsGranularity, setCallsGranularity] = useState("mes");
+  const [duracaoGranularity, setDuracaoGranularity] = useState("mes");
+
   const priorityColorSeries = (calls?.priority_keys ?? []).map((key) => ({
     dataKey: key,
     label: key,
@@ -135,13 +149,13 @@ export default function MajorIncs() {
               </Panel>
             </div>
 
-            <Panel title="Evolução Diária">
+            <Panel title="Evolução Diária" actions={<GranularityToggle value={despGranularity} onChange={setDespGranularity} />}>
               <TrendChart
-                data={desp?.daily ?? []}
+                data={aggregateByGranularity(desp?.daily ?? [], despGranularity, ["tratados", "despromovidos"])}
                 type="bar"
                 xKey="date"
                 height={340}
-                groupedDateAxis
+                groupedDateAxis={despGranularity === "dia"}
                 series={[
                   { dataKey: "tratados", label: "Tratados Como P1", color: "#E21B23" },
                   { dataKey: "despromovidos", label: "Despromovidos", color: "#FAB138" },
@@ -173,17 +187,31 @@ export default function MajorIncs() {
               </Panel>
             </div>
 
-            <Panel title="Total de Calls" subtitle="Por dia, por prioridade">
-              <TrendChart data={calls?.daily_calls ?? []} type="bar" xKey="date" height={340} groupedDateAxis series={priorityColorSeries} />
+            <Panel
+              title="Total de Calls"
+              subtitle="Por prioridade"
+              actions={<GranularityToggle value={callsGranularity} onChange={setCallsGranularity} />}
+            >
+              <TrendChart
+                data={aggregateByGranularity(calls?.daily_calls ?? [], callsGranularity, calls?.priority_keys ?? [])}
+                type="bar"
+                xKey="date"
+                height={340}
+                groupedDateAxis={callsGranularity === "dia"}
+                series={priorityColorSeries}
+              />
             </Panel>
 
-            <Panel title="Total de Tempo em Call" subtitle="Por dia">
+            <Panel
+              title="Total de Tempo em Call"
+              actions={<GranularityToggle value={duracaoGranularity} onChange={setDuracaoGranularity} />}
+            >
               <TrendChart
-                data={calls?.daily_duracao ?? []}
+                data={aggregateByGranularity(calls?.daily_duracao ?? [], duracaoGranularity, ["segundos"])}
                 type="line"
                 xKey="date"
                 height={340}
-                groupedDateAxis
+                groupedDateAxis={duracaoGranularity === "dia"}
                 series={[{ dataKey: "segundos", label: "Tempo em Call", color: "#4f7fff" }]}
                 valueFormatter={fmtHms}
               />

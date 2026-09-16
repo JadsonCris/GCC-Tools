@@ -150,6 +150,7 @@ export function computeEmployeeRange(dm, year, months) {
     const md = computeEmployeeMonth(dm, year, m);
     acc.M += md.M; acc.T += md.T; acc.N += md.N; acc.I += md.I; acc.F += md.F;
     acc.night += md.night; acc.worked += md.worked;
+    acc.fdsTrab += md.fdsTrab; acc.fdsLivre += md.fdsLivre;
   });
   return acc;
 }

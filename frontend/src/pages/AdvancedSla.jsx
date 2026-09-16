@@ -6,10 +6,22 @@ import { AlertTriangle, Clock } from "lucide-react";
 export default function AdvancedSla() {
   const { data: sla3 } = useQuery({ queryKey: ["sla3-detailed"], queryFn: getSla3Detailed });
   const { data: sla4 } = useQuery({ queryKey: ["sla4-detailed"], queryFn: getSla4Detailed });
-  const { data: backlog } = useQuery({ queryKey: ["backlog-summary"], queryFn: getBacklogSummary });
-  const { data: desp } = useQuery({ queryKey: ["despromovidos-summary"], queryFn: getDespromovidosSummary });
+  // RESOLVIDO (bug real, revisão 2026-09): /analytics/backlog e
+  // /analytics/despromovidos foram descontinuados em 2026-08 (ver
+  // backend/cache.py _DISABLED_TABLE_ERRORS) — devolvem sempre 503,
+  // pra sempre, não é uma falha transitória. `retry: false` evita
+  // insistir 3x num endpoint que nunca vai responder; `isError` deixa
+  // mostrar "Indisponível" em vez de zeros/"NOMINAL" que pareciam dado
+  // real (Despromovidos tem substituto: página "Major Incs").
+  const { data: backlog, isError: isBacklogError } = useQuery({
+    queryKey: ["backlog-summary"], queryFn: getBacklogSummary, retry: false,
+  });
+  const { data: desp, isError: isDespError } = useQuery({
+    queryKey: ["despromovidos-summary"], queryFn: getDespromovidosSummary, retry: false,
+  });
 
-  const isBacklogCritical = (backlog?.backlog_total || 0) > 150;
+  const isBacklogCritical = !isBacklogError && (backlog?.backlog_total || 0) > 150;
+  const sla3Pct = sla3?.sla3_pct;
 
   return (
     <div className="space-y-6">
@@ -20,9 +32,9 @@ export default function AdvancedSla() {
 
       {/* Cartões Base */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <KPICard title="SLA 3.0 Cumprido" value={`${sla3?.sla3_pct || 100}%`} color="text-emerald-400" />
-        <KPICard title="Incidentes Acumulados" value={backlog?.backlog_incidentes} color="text-rose-400" />
-        <KPICard title="Pedidos RITM Pendentes" value={backlog?.backlog_ritm} color="text-pink-400" />
+        <KPICard title="SLA 3.0 Cumprido" value={sla3Pct != null ? `${sla3Pct}%` : "—"} color="text-emerald-400" />
+        <KPICard title="Incidentes Acumulados" value={isBacklogError ? "Indisponível" : (backlog?.backlog_incidentes ?? "—")} color="text-rose-400" />
+        <KPICard title="Pedidos RITM Pendentes" value={isBacklogError ? "Indisponível" : (backlog?.backlog_ritm ?? "—")} color="text-pink-400" />
         <KPICard title="Quebras SLA 4.0" value={sla4?.sla4_count} color="text-amber-500" />
       </div>
 
@@ -35,9 +47,13 @@ export default function AdvancedSla() {
               Distribuição de Fila Viva (ServiceNow Queue)
             </h3>
             <span className={`text-xs font-mono font-bold px-2.5 py-1 rounded-full ${
-              isBacklogCritical ? "bg-red-500/10 text-red-400 border border-red-500/20" : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+              isBacklogError
+                ? "bg-slate-500/10 text-slate-400 border border-slate-500/20"
+                : isBacklogCritical
+                  ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                  : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
             }`}>
-              STATUS: {isBacklogCritical ? "CRÍTICO" : "NOMINAL"}
+              STATUS: {isBacklogError ? "INDISPONÍVEL" : isBacklogCritical ? "CRÍTICO" : "NOMINAL"}
             </span>
           </div>
 
@@ -65,14 +81,16 @@ export default function AdvancedSla() {
               Incidentes Despromovidos (Downgrades)
             </h3>
             <p className="text-xs text-slate-400">
-              Alertas gerados quando um P1 crítico é alterado para prioridades mais baixas após triagem.
+              {isDespError
+                ? "Este indicador foi descontinuado — ver a página \"Major Incs\" para P1's Despromovidos atualizados."
+                : "Alertas gerados quando um P1 crítico é alterado para prioridades mais baixas após triagem."}
             </p>
           </div>
 
           <div className="mt-4 bg-slate-950 rounded-xl p-4 border border-slate-800/40 text-center">
             <span className="text-xs text-slate-500 uppercase block tracking-wider font-medium">Contagem de Incidentes</span>
-            <span className="text-4xl font-black text-amber-500 font-mono mt-1 block">
-              {desp?.p1_despromovidos_count || 0}
+            <span className={`text-4xl font-black font-mono mt-1 block ${isDespError ? "text-slate-500 text-base" : "text-amber-500"}`}>
+              {isDespError ? "Indisponível" : (desp?.p1_despromovidos_count ?? "—")}
             </span>
           </div>
         </div>

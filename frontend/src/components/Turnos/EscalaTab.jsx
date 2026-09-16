@@ -72,6 +72,17 @@ export default function EscalaTab({ employees, yearShifts, year, month, onSaved,
     return () => window.removeEventListener("mouseup", stop);
   }, []);
 
+  // RESOLVIDO (bug real): ao montar (year/month mudou, ver key no
+  // Turnos.jsx pai), o `dirty` LOCAL já nasce false, mas o pai
+  // (escalaDirty) podia ter ficado true de uma visita anterior (ex:
+  // utilizador confirmou "Sair sem guardar?" e descartou as alterações)
+  // — sem isto, o pai continuava a pensar que há alterações por
+  // guardar e a pedir confirmação à toa ao trocar de mês/separador.
+  useEffect(() => {
+    onDirtyChange?.(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleSave() {
     setSaving(true);
     try {
@@ -88,27 +99,58 @@ export default function EscalaTab({ employees, yearShifts, year, month, onSaved,
 
   async function handleAddEmployee() {
     if (!newName.trim()) return;
-    await createEmployee(newName.trim(), newPos.trim() || "MOD");
-    setNewName("");
-    onSaved();
+    try {
+      await createEmployee(newName.trim(), newPos.trim() || "MOD");
+      setNewName("");
+      onSaved();
+    } catch {
+      alert("Erro ao adicionar colaborador. Tenta novamente.");
+    }
   }
   async function handleToggleHide(emp) {
-    await updateEmployee(emp.id, { hidden: !emp.hidden });
-    onSaved();
+    try {
+      await updateEmployee(emp.id, { hidden: !emp.hidden });
+      onSaved();
+    } catch {
+      alert("Erro ao atualizar colaborador. Tenta novamente.");
+    }
   }
   async function handleShowAll() {
-    await Promise.all(hidden.map((e) => updateEmployee(e.id, { hidden: false })));
-    onSaved();
+    try {
+      await Promise.all(hidden.map((e) => updateEmployee(e.id, { hidden: false })));
+      onSaved();
+    } catch {
+      alert("Erro ao mostrar colaboradores ocultos. Tenta novamente.");
+    }
   }
   async function handleDelete(emp) {
     if (!confirm(`Remover ${emp.name}? Isto apaga também o histórico de turnos desse colaborador.`)) return;
-    await deleteEmployee(emp.id);
-    onSaved();
+    try {
+      await deleteEmployee(emp.id);
+      onSaved();
+    } catch {
+      alert("Erro ao remover colaborador. Tenta novamente.");
+    }
   }
   async function handleClearMonth() {
     if (!confirm(`Limpar os turnos de todos os colaboradores em ${year}-${String(month).padStart(2, "0")}?`)) return;
-    await clearMonth(year, month);
-    onSaved();
+    try {
+      await clearMonth(year, month);
+      // RESOLVIDO (bug real: "Limpar Mês" ressuscitava os turnos
+      // apagados): isto só limpava no servidor — o `draft` local (o que
+      // a grelha mostra E o que "Guardar" reenvia) nunca era atualizado,
+      // porque o componente não remonta (year/month não mudam ao
+      // limpar o mês atual, só a key muda quando se troca de mês/ano —
+      // ver comentário no topo do ficheiro). A grelha continuava a
+      // mostrar os turnos "apagados", e o próximo "Guardar" reescrevia-
+      // os no servidor, desfazendo a limpeza sem aviso nenhum.
+      setDraft(Object.fromEntries(employees.map((e) => [e.id, {}])));
+      setDirty(false);
+      onDirtyChange?.(false);
+      onSaved();
+    } catch {
+      alert("Erro ao limpar o mês. Tenta novamente.");
+    }
   }
 
   const problems = [];

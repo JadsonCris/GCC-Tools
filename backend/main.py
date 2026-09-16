@@ -17,7 +17,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from cache import start_scheduler
 from config import settings
-from routers import dashboard, sla, incidents, operators, analytics, turnos, major_incs, reports_email, ponto_situacao
+from routers import dashboard, sla, incidents, operators, analytics, turnos, major_incs, reports_email, ponto_situacao, db_admin, auth, team
+from services import team_service
 from services.turnos_service import seed_if_empty
 
 logging.basicConfig(level=logging.INFO)
@@ -40,11 +41,23 @@ app.include_router(turnos.router, prefix="/api")
 app.include_router(major_incs.router, prefix="/api")
 app.include_router(reports_email.router, prefix="/api")
 app.include_router(ponto_situacao.router, prefix="/api")
+app.include_router(db_admin.router, prefix="/api")
+app.include_router(auth.router, prefix="/api")
+app.include_router(team.router, prefix="/api")
 
 
 @app.on_event("startup")
 def on_startup():
+    if settings.AUTH_DEV_BYPASS_USER:
+        logging.getLogger("auth").warning(
+            "AUTH_DEV_BYPASS_USER está definido ('%s') — todos os pedidos sem o "
+            "cabeçalho %s serão autenticados como este utilizador, SEM verificação "
+            "nenhuma. Isto é só para desenvolvimento local; NUNCA arrancar assim "
+            "num servidor real.",
+            settings.AUTH_DEV_BYPASS_USER, settings.AUTH_HEADER_NAME,
+        )
     seed_if_empty()
+    team_service.seed_if_empty()
     start_scheduler()
 
 

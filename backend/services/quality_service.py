@@ -21,6 +21,8 @@ real do cabeçalho "Channel".
 """
 import pandas as pd
 
+from . import team_service
+
 
 def _nok_mask(df: pd.DataFrame) -> pd.Series:
     return df["Coluna"] == 1
@@ -114,10 +116,13 @@ def get_incidents_by_sla_status(df: pd.DataFrame, status: str) -> list[dict]:
     if "SLA 3.0" in subset.columns:
         subset["sla1_minutes"] = (subset["SLA 3.0"] / 60).round(1)
         subset = subset.drop(columns=["SLA 3.0"])
-    return subset.rename(columns={
+    subset = subset.rename(columns={
         "Incidente": "number", "short_description": "description", "Técnico": "tecnico",
         "Column Measure": "region", "Justificacao Texto": "justificacao",
-    }).to_dict(orient="records")
+    })
+    if "tecnico" in subset.columns:
+        subset["tecnico"] = subset["tecnico"].apply(team_service.normalize_bot_name)
+    return subset.to_dict(orient="records")
 
 
 def get_sem_evento_breakdown(df: pd.DataFrame) -> dict:
@@ -137,7 +142,13 @@ def get_sem_evento_breakdown(df: pd.DataFrame) -> dict:
     u_first_occurrence — as outras 55 têm evento com delta negativo).
     """
     total = len(df)
-    sem_evento_mask = df["u_first_occurrence"].isna()
+    if "u_first_occurrence" in df.columns:
+        sem_evento_mask = df["u_first_occurrence"].isna()
+    else:
+        # Rede de segurança (mesma já usada em transform.add_sla_columns):
+        # se o export voltar a não trazer o campo, trata tudo como "sem
+        # evento" em vez de rebentar com KeyError.
+        sem_evento_mask = pd.Series(True, index=df.index)
     sem_evento = df[sem_evento_mask]
     com_evento_count = total - int(sem_evento_mask.sum())
 

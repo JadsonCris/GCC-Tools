@@ -85,6 +85,28 @@ export async function getSlaTrend(start, end, region) {
   return data.months;
 }
 
+export async function getOperationalTimeline(year, month, region, hidden) {
+  const params = { year, month };
+  if (region && region !== "Global") params.region = region;
+  if (hidden && hidden.length) params.hidden = hidden.join(",");
+  const { data } = await api.get("/dashboard/timeline", { params });
+  return data.sessions;
+}
+
+export async function getIncidentsList(start, end, region) {
+  const params = { start, end };
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/dashboard/incidents-list", { params });
+  return data.incidents;
+}
+
+export async function getAioperTrend(start, end, region) {
+  const params = { start, end };
+  if (region && region !== "Global") params.region = region;
+  const { data } = await api.get("/dashboard/aioper-trend", { params });
+  return data.months;
+}
+
 export async function getMajorIncs(start, end, region) {
   const params = { start, end };
   if (region && region !== "Global") params.region = region;

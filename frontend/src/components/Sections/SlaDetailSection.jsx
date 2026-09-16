@@ -10,6 +10,7 @@ import { getRangeSummary, getSlaTrend } from "../../service/dashboardApi";
 import { useDateRange } from "../../context/DateRangeContext.jsx";
 import TrendChart from "../Charts/TrendChart";
 import IncidentsStatusModal from "../Tables/IncidentsStatusModal";
+import { minutesToHms } from "../../utils/formatTime";
 
 function Panel({ title, subtitle, children }) {
   return (
@@ -82,6 +83,7 @@ export default function SlaDetailSection() {
                 { dataKey: "sla1_avg_minutes", label: "Sem Justificações", color: "#E21B23" },
                 { dataKey: "sla1_avg_minutes_justificado", label: "Com Justificações", color: "#0FA811" },
               ]}
+              valueFormatter={minutesToHms}
             />
           )}
         </Panel>

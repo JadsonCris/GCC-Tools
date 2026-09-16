@@ -116,10 +116,15 @@ export default function CAB() {
   // Junta os changes marcados na tabela bruta à mesma lista dos changes
   // manuais (dedupe por Number) — mesma lógica de
   // adicionarChangesSelecionadosCAB() no original.
+  // RESOLVIDO (bug real): o dedupe só olhava pra `manuais`, não pra
+  // `resultado` (os changes já cruzados automaticamente com o Outage) —
+  // marcar a checkbox de um change que já vinha automaticamente no
+  // relatório duplicava-o no e-mail final (handleEnviar junta
+  // [...resultadoFiltro, ...manuais]).
   function handleAdicionarChangesSelecionados() {
     if (selectedChangeIdx.size === 0) return;
     const numerosExistentes = new Set(
-      manuais.map((r) => String(r["Number"] || "").trim().toLowerCase()).filter(Boolean)
+      [...manuais, ...resultado].map((r) => String(r["Number"] || "").trim().toLowerCase()).filter(Boolean)
     );
     const novosManuais = [...manuais];
     const novosAdicionados = new Set(addedChangeIdx);

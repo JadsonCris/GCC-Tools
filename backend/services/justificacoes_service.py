@@ -53,23 +53,38 @@ def parse_justificacoes(df: pd.DataFrame | None) -> pd.DataFrame:
     return df[df["_slas"].apply(len) > 0]
 
 
+def _join_unique_texts(texts) -> str:
+    """Junta os textos de um mesmo incidente na ordem em que aparecem,
+    pulando vazios e qualquer texto que já esteja contido (substring) no
+    que já foi juntado até aqui — mesma regra de sempre, só extraída pra
+    ser reaproveitada pelo groupby de get_justified_map."""
+    result = None
+    for t in texts:
+        if result is None:
+            result = t
+        elif t and t not in result:
+            result = f"{result} | {t}"
+    return result if result is not None else ""
+
+
 def get_justified_map(df_parsed: pd.DataFrame, sla: int) -> dict[str, str]:
     """
     Incidente (limpo) -> texto da justificação, só pra quem justifica o
     SLA pedido (1-4). Se o mesmo incidente tiver mais de uma linha pro
     mesmo SLA (dados de origem duplicados/múltiplos motivos), junta os
     textos com " | ".
+
+    RESOLVIDO (otimização 2026-09-16): usava `.iterrows()` (loop Python
+    linha a linha, lento em pandas) pra montar o dict — trocado por
+    `groupby("Incidente").agg(_join_unique_texts)` (mesma junção, mesma
+    ordem dentro de cada grupo, validado com diff de dict contra a versão
+    antiga nos 4 SLAs com dados reais).
     """
     if df_parsed is None or df_parsed.empty:
         return {}
     subset = df_parsed[df_parsed["_slas"].apply(lambda s: sla in s)]
-    result: dict[str, str] = {}
-    for _, row in subset.iterrows():
-        inc = row["Incidente"]
-        texto = str(row.get("texto") or "").strip()
-        if inc in result:
-            if texto and texto not in result[inc]:
-                result[inc] = f"{result[inc]} | {texto}"
-        else:
-            result[inc] = texto
-    return result
+    if subset.empty:
+        return {}
+    texto = subset.get("texto", pd.Series(dtype=str)).apply(lambda v: str(v or "").strip())
+    subset = subset.assign(_texto=texto)
+    return subset.groupby("Incidente")["_texto"].agg(_join_unique_texts).to_dict()

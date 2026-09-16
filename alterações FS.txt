@@ -1709,3 +1709,565 @@ agora confiáveis — cada um tem lastro real no campo de prioridade do
 incidente, não só na convenção de nome da SLA.
 
 TestClient revalidado (200 em todos os cenários).
+
+
+ALTERAÇÕES FS — 2026-09-15 — Central Operacional (Atividade Operacional v2), Autenticação/Autorização, Base de Dados, Tabelas Pivot, AIOPER, gráficos e revisão geral
+================================================================================
+
+Sessão longa e com muitas frentes. Resumo geral, por ordem de pedido:
+1) Nova secção "Atividade Operacional" em Central Operacional (porte de
+   um protótipo HTML "análise de incidentes v20") com Timeline,
+   Equilíbrio de Turnos, Lista de Incidentes, CI's do AIOPS e filtro de
+   operadores.
+2) Correção da ingestão do ficheiro de CI's (nome de coluna errado).
+3) Nova view "Base de Dados" (navegador de tabelas da BD).
+4) Autenticação/autorização: "Gestão de Turnos" e "Base de Dados"
+   passaram a ser só para admins, com credenciais integradas do browser
+   (cabeçalho de confiança, atrás de um proxy autenticador).
+5) Unificação de TODO o roster da equipa (nomes, PT/BR, admins, ocultos,
+   bot) numa única tabela, substituindo 7 sítios diferentes que tinham
+   cada um a sua cópia parcial.
+6) Duas tabelas pivot novas em Central Operacional ("Incidentes Abertos
+   por Prioridade"/"por Source") e o mesmo conjunto de gráficos+pivot
+   replicado na view AIOPER, só para incidentes abertos pelo bot.
+7) Ajustes visuais nos gráficos (formato de tempo HH:MM:SS no SLA1,
+   rótulos que não tocam no eixo nem se sobrepõem, prioridade
+   verde-sobre-vermelho quando colidem).
+8) Revisão geral de tudo o que foi feito nesta sessão, a pedido do
+   utilizador — 3 bugs reais encontrados e corrigidos (não só estilo).
+
+
+1. CENTRAL OPERACIONAL — ATIVIDADE OPERACIONAL v2 (Timeline, Equilíbrio, CI's, Lista de Incidentes)
+--------------------------------------------------------------------------------------------------
+
+Pedido: portar um protótipo HTML standalone ("análise_incidentes 3.html",
+v20) para dentro de "Atividade Operacional" em Central Operacional,
+adaptado aos dados reais: integração das CI's como 3º indicador (a par
+de Abertos/Resolvidos), roster de equipa corrigido, horários de turno
+reais por equipa, e 4 blocos novos — Timeline, Equilíbrio de Turnos,
+Lista de Incidentes e "CI's nos INCs do AIOPS" — mais um filtro para
+esconder/mostrar operadores em todos estes blocos ao mesmo tempo.
+
+Backend:
+- backend/services/timeline_service.py (novo): deteção de "sessões" de
+  trabalho por operador — porta de tlBuildSessions/tlMakeSession do
+  protótipo v20. Agrupa eventos (Abertos + Resolvidos + CI's) por
+  operador, ordenados no tempo; um gap > 1h fecha o período de
+  atividade atual e inicia outro (SESSION_GAP = 1h). `get_sessions()`
+  devolve uma lista de {tecnico, team, shift, start, end,
+  duration_min, inc, res, ci, total} — alimenta ao mesmo tempo a
+  Timeline e o Equilíbrio de Turnos (a mesma lista de sessões, sem
+  pedido em duplicado ao backend, os controlos do Equilíbrio ficam
+  instantâneos no frontend).
+- backend/services/ci_service.py (novo): normaliza a tabela bruta de
+  CI's (task_ci_list.do) — extrai o número do incidente (regex sobre
+  a coluna "Task"), resolve o autor via team_service, marca
+  is_aiops_self quando foi o próprio bot a colocar o CI.
+  `get_ci_on_aiops_incidents()` cruza os incidentes abertos pelo AIOPS
+  (Grupo=="AIOPER") com a tabela de CI's — ranking de quem "limpa
+  atrás" do bot.
+- backend/services/operational_activity_service.py: `SHIFT_STARTS`
+  passou a usar os horários REAIS por equipa (PT: 07:00/15:00/23:00,
+  BR: 09:30/17:30/01:30 — antes eram os turnos genéricos do protótipo,
+  09-17/17-01/01-09 para toda a gente).
+- backend/services/dashboard_service.py: `get_incidents_list()` — uma
+  linha por incidente do período (quem abriu, quem resolveu, nº de
+  CI's, timestamp do CI mais recente), alimenta a "Lista de
+  Incidentes".
+- backend/services/history_service.py: `get_operational_timeline()`
+  (Timeline/Equilíbrio, com o próprio seletor de mês/ano, independente
+  do filtro global) e `get_incidents_list()`; parâmetro `hidden`
+  (nomes separados por vírgula) passado a `get_monthly_summary`/
+  `get_range_summary`/`get_operational_timeline` — o filtro de
+  operadores esconde/mostra em todos os blocos ao mesmo tempo.
+- backend/routers/dashboard.py: endpoints novos `/dashboard/timeline`,
+  `/dashboard/incidents-list`; query param `hidden` em `/monthly`,
+  `/range`, `/timeline`.
+
+Frontend:
+- frontend/src/components/CentralOperacional/ (nova pasta):
+  shared.jsx (Kpi/TurnoCards partilhados), EquipaTab.jsx (cards
+  PT/BR/Neutra/AIOPS), TimelineTab.jsx (grelha horizontal dias x horas,
+  zoom, cores por equipa), EquilibrioTab.jsx (deteção de dias com
+  carga muito diferente entre uma pessoa PT e uma BR em simultâneo —
+  ver utils/equilibrioCalc.js), AiopsCiTab.jsx ("CI's em INCs do
+  AIOPS", com checkbox "excluir CI's do próprio AIOPS"),
+  IncidentsListTab.jsx (tabela com filtro/ordenação/exportação para
+  Excel local, sem pedido novo ao backend).
+- frontend/src/utils/operationalActivityCalc.js (novo): recalcula a
+  vista "Global" da Atividade Operacional excluindo operadores ocultos
+  — inteiramente no frontend, somando as vistas "individual" já
+  devolvidas pelo backend (sem pedido novo a cada vez que se
+  oculta/mostra alguém). Usado também para agregar os cards por
+  equipa em EquipaTab.jsx.
+- frontend/src/utils/equilibrioCalc.js (novo): overlap/discrepância
+  entre sessões PT e BR, com controlos de sobreposição mínima,
+  diferença mínima e % de desequilíbrio — opera sobre a mesma lista de
+  sessões da Timeline (sem pedido novo ao backend).
+- frontend/src/components/Sections/OperationalActivitySection.jsx:
+  passou a ter 7 separadores (Global/Individual + os 5 novos acima).
+
+Testado: comparação de snapshot JSON de `get_range_summary` antes/depois
+de cada mudança de roster/turnos, contagens de equipas PT/BR conferidas
+pessoa a pessoa.
+
+
+2. CORREÇÃO DA INGESTÃO DAS CI's
+------------------------------------
+Reportado pelo utilizador: "o ficheiro CI_URL não foi consumido".
+Diagnóstico direto no ficheiro real (backend/downloads/CI_URL.xls,
+17156 linhas): o nome da coluna assumido a partir do sysparm_fields
+("Configuration item", i minúsculo) não batia com o cabeçalho real do
+export ("Configuration Item", I maiúsculo). Corrigido em
+backend/cache.py: `TABLE_KEYS["cis"] = ("Task", "Configuration Item")`
+— `resolver_coluna()` (busca tolerante, case-insensitive) já absorve
+pequenas variações destas no futuro sem precisar de código novo.
+Confirmado com o ficheiro real: as 17156 linhas passaram a ser lidas e
+gravadas corretamente na tabela "cis".
+
+
+3. NOVA VIEW "BASE DE DADOS"
+---------------------------------
+Pedido: uma view para navegar as tabelas da BD diretamente, por baixo
+de "Gestão de Turnos" na sidebar.
+- backend/services/db_admin_service.py (novo): `list_tables()` (lista
+  as tabelas reais via `sqlite_master`) e `get_table_data(table)` —
+  nome da tabela SEMPRE revalidado contra `sqlite_master` antes de
+  entrar em qualquer SQL (defesa contra SQL injection; não há
+  parametrização possível para nomes de tabela/coluna em SQLite, por
+  isso a validação é feita à mão contra a lista de tabelas reais).
+- backend/routers/db_admin.py (novo): GET /api/db/tables, GET
+  /api/db/tables/{table}.
+- frontend/src/pages/DatabaseViewer.jsx (novo): seletor de tabela +
+  tabela paginada com os dados reais.
+- frontend/src/service/dbAdminApi.js (novo).
+- frontend/src/layouts/MainLayout.jsx: link "Base de Dados" na sidebar,
+  logo abaixo de "Gestão de Turnos".
+
+
+4. AUTENTICAÇÃO E AUTORIZAÇÃO (admin vs operador)
+-------------------------------------------------------
+Pedido do utilizador: "Gestão de Turnos" e "Base de Dados" só
+acessíveis a utilizadores específicos, com um controlo de quem é
+"admin" e quem é "operador". Contexto obtido por perguntas de
+esclarecimento: a app vai ficar num servidor acedida via browser pela
+empresa, e a empresa já tem os utilizadores identificados por
+"cookies"/credenciais do browser — decidiu-se usar esse mecanismo em
+vez de um login com password próprio.
+
+- backend/services/auth_service.py (novo): `get_current_user()` lê o
+  username de um cabeçalho de confiança (nome do cabeçalho configurável
+  via `AUTH_HEADER_NAME`, default "X-Remote-User") ou, em
+  desenvolvimento, de `AUTH_DEV_BYPASS_USER` (só deve existir em
+  ambiente local, nunca em produção — documentado explicitamente no
+  .env.example e no código). `require_admin()` é uma dependency FastAPI
+  (401 sem utilizador identificado, 403 se não for admin) usada nos
+  routers protegidos.
+- backend/routers/auth.py (novo): GET /api/auth/me (quem sou eu,
+  sou admin?).
+- backend/routers/turnos.py / backend/routers/db_admin.py:
+  `dependencies=[Depends(auth_service.require_admin)]` no
+  `APIRouter(...)` — protege TODOS os endpoints do router de uma vez
+  (não é preciso decorar cada endpoint individualmente).
+- backend/.env: `AUTH_HEADER_NAME=X-Remote-User`,
+  `AUTH_DEV_BYPASS_USER` (só localmente).
+- Frontend: frontend/src/hooks/useCurrentUser.js (pergunta /auth/me),
+  frontend/src/components/RequireAdmin.jsx (bloqueia a rota se não for
+  admin — usado a envolver as rotas de Gestão de Turnos/Base de Dados
+  em App.jsx), frontend/src/layouts/MainLayout.jsx (esconde os links
+  da sidebar para quem não é admin).
+
+AVISO DE SEGURANÇA EXPLÍCITO (documentado no código e reforçado aqui):
+este mecanismo confia cegamente no cabeçalho `X-Remote-User` — só é
+seguro se o servidor estiver atrás de um proxy que AUTENTIQUE de
+verdade o utilizador (Windows Integrated Auth/NTLM/Kerberos) antes de
+a app receber o pedido, e que não deixe ninguém definir esse cabeçalho
+à mão vindo de fora. Sem esse proxy, qualquer pessoa podia mandar o
+cabeçalho que quisesse e fingir ser admin. A esconder os links da
+sidebar no frontend NÃO é proteção nenhuma por si só — a proteção real
+está nos `require_admin` do backend.
+
+Utilizadores iniciais adicionados (lista de 17 fornecida pelo
+utilizador, 4 marcados como admin): EX132427 André Fernandes, EX134172
+Francisco Salgado, EX122721 Jadson Silva e EX144016 Ricardo Silva como
+admins; os restantes 13 como operadores normais.
+
+
+5. UNIFICAÇÃO DO ROSTER DA EQUIPA (team_members)
+------------------------------------------------------
+Pedido do utilizador, depois de reparar que a informação de pessoas
+estava espalhada: "não será melhor pegar todos os códigos perdidos que
+temos com users e unificar?". Antes de mexer, mapeei os 7 sítios
+diferentes que tinham cada um a sua cópia parcial da mesma informação
+(USUARIOS em team_service.py, TEAM_PT/TEAM_BR em
+operational_activity_service.py — já tinha causado um bug real nesta
+sessão, 4 pessoas a cair em "Sem equipa" por essa lista estar
+desatualizada —, HIDDEN_TECNICOS/MONITORIZACAO_NOMES em transform.py,
+a conta do bot AIOPS duplicada em cache.py e ci_service.py com nomes
+diferentes, e a tabela `app_admins` da autenticação) e planeei a
+migração antes de implementar (plan mode).
+
+- backend/services/team_service.py: reescrito como camada única de
+  acesso ao roster. Tabela nova `team_members(id, username, name,
+  team, is_admin, is_hidden, force_monitorizacao, is_bot, added_at)`.
+  `seed_if_empty()` migra automaticamente, uma única vez, os valores
+  hardcoded anteriores (18 pessoas + equipa PT/BR + nomes ocultos +
+  overrides de monitorização + o bot AIOPS), preservando os admins que
+  já tinham sido adicionados na tabela antiga `app_admins` antes dela
+  deixar de ser usada — ninguém perdeu acesso na transição.
+  Cache em processo (`_cache`/`_members_cached()`/`_invalidate_cache()`)
+  — a tabela é pequena mas lida muitas vezes por pedido (uma vez por
+  linha de milhares de eventos), sem isto cada linha abriria uma
+  ligação SQLite nova.
+  Funções novas: `team_of_name()`, `hidden_names_upper()`,
+  `monitorizacao_override_names()`, `bot_usernames()`, `is_admin()`,
+  CRUD completo (`list_members/add_member/update_member/remove_member`)
+  para o painel de gestão.
+- backend/services/operational_activity_service.py: `TEAM_PT`/`TEAM_BR`
+  locais removidos, `team_of()` passou a delegar em
+  `team_service.team_of_name()`.
+- backend/services/transform.py: `HIDDEN_TECNICOS`/`MONITORIZACAO_NOMES`
+  locais removidos, `exclude_hidden_technicians()`/`add_grupo_column()`
+  passaram a perguntar ao team_service.
+- backend/cache.py: `_build_despromovidos_url()` passou a montar a
+  query a partir de `team_service.get_usuarios().keys()` +
+  `team_service.bot_usernames()`.
+- backend/services/ci_service.py: `AIOPS_USERNAME` local removido, usa
+  `team_service.bot_usernames()`.
+- backend/routers/team.py (novo, admin-only): GET/POST
+  /api/team/members, PATCH/DELETE /api/team/members/{id}.
+- backend/main.py: `team_service.seed_if_empty()` no arranque
+  (substitui o antigo `auth_service.seed_if_empty()`).
+- Frontend: frontend/src/pages/DatabaseViewer.jsx ganhou o painel
+  "Gestão de Equipa" — tabela com Nome, Código, Equipa (PT/BR/—),
+  Admin, Oculto e formulário para adicionar alguém novo; substitui o
+  checklist antigo "Gestão de Acessos" (só admins). frontend/src/
+  service/teamApi.js (novo): listMembers/addMember/updateMember/
+  removeMember.
+- Segurança simples: `update_member`/`remove_member` recusam desmarcar
+  o último administrador (evita a equipa ficar trancada de fora sem
+  querer) — testado explicitamente (tentar remover o último admin dá
+  erro, não apaga).
+
+Testado: `list_members()` conferido pessoa a pessoa contra os valores
+hardcoded anteriores; `get_range_summary` recalculado antes/depois da
+migração, `operational_activity`/`kpis`/`sla_overview` idênticos;
+mudar equipa de alguém, marcar/desmarcar admin, adicionar pessoa nova
+e tentar remover o último admin testados a sério via script direto.
+
+
+6. TABELAS PIVOT — "INCIDENTES ABERTOS POR PRIORIDADE"/"POR SOURCE"
+------------------------------------------------------------------------
+Pedido: réplica exata de uma matriz do Power BI antigo (Prioridade x
+Source x Mês, e o inverso), colapsável.
+- backend/services/dashboard_service.py: `_two_level_pivot()` (pivot
+  genérico Nível1 > Nível2 x mês -> contagem), `get_priority_source_pivot()`
+  (Prioridade > Source, ordenado por severidade Critical>High>Moderate>
+  Low) e `get_source_priority_pivot()` (Source > Prioridade, ordenado
+  por volume).
+- backend/services/history_service.py: `_build_summary()` ganhou
+  `priority_source_matrix`/`source_priority_matrix` (e
+  `aioper_priority_source_matrix`, só incidentes do AIOPER — ver secção
+  7) no payload de `/dashboard/monthly` e `/dashboard/range`, sem
+  endpoint novo.
+- frontend/src/components/Tables/GroupedMonthlyTable.jsx (novo): tabela
+  em árvore de 2 níveis, cada linha de nível 1 colapsável, com botões
+  "Expandir tudo"/"Colapsar tudo".
+  - Bug de JSX corrigido durante o desenvolvimento (apanhado por
+    `npx eslint`, não por inspeção visual): faltava um `</div>` de
+    fecho e sobrava uma referência à variável antiga `collapsed` depois
+    de o estado ter sido invertido para `expanded` (o pedido do
+    utilizador foi as tabelas começarem SEMPRE colapsadas, não
+    expandidas — o Set de expandidos começa vazio em vez de cheio).
+- frontend/src/pages/CentralOperacional.jsx: as duas tabelas ligadas ao
+  `summary` já existente.
+
+
+7. VIEW "AIOPER" — GRÁFICOS DE TENDÊNCIA + PIVOT SÓ DO BOT
+------------------------------------------------------------------
+Pedido: os mesmos gráficos de SLA1/SLA2/Incidentes por Prioridade do
+"Report SLAs", e a mesma tabela pivot de Prioridade x Source, mas só
+para incidentes abertos pelo AIOPER — mais dados na view do bot.
+- backend/services/history_service.py: `get_aioper_trend(start, end,
+  region)` — réplica de `get_sla_trend()`, mas filtra `Grupo=="AIOPER"`
+  ANTES de chamar `dashboard_service.get_sla1_sla2`/
+  `get_priority_breakdown` e `quality_service.get_quality_metrics`, e
+  chama essas funções diretamente em vez de `get_range_summary()`
+  inteiro (que calcularia SLA3/SLA4/atividade operacional/CI's sem
+  nenhum consumidor nesta view).
+- backend/routers/dashboard.py: novo endpoint
+  GET /dashboard/aioper-trend?start=&end=&region=.
+- frontend/src/pages/AIOper.jsx: painéis novos de SLA1/SLA2/Prioridade
+  (mês a mês) + `<GroupedMonthlyTable>` com `aioper_priority_source_matrix`.
+
+Pedido relacionado, mesma conversa: "sempre que vou a Central
+Operacional as tabelas ficam expandidas... quero que estejam
+comprimidas e que eu faça a expansão" — motivou o `expanded`
+começar vazio por omissão no GroupedMonthlyTable.jsx acima (partilhado
+entre Central Operacional e AIOPER).
+
+
+8. AJUSTES VISUAIS NOS GRÁFICOS
+-------------------------------------
+
+a) SLA1 em formato de tempo (HH:MM:SS)
+Reportado com screenshot: os gráficos de SLA1 mostravam minutos em
+decimal em vez de tempo.
+- frontend/src/utils/formatTime.js (novo): `minutesToHms(minutos)`.
+- Aplicado aos painéis de SLA1 (Report SLAs e AIOPER) como
+  `valueFormatter` do TrendChart (prop já existente, só não estava a
+  ser aproveitada para SLA1).
+
+b) Rótulos colados ao eixo e sobrepostos entre si
+Reportado com 3 screenshots: valores dos gráficos coladas à linha
+lateral do eixo, e números sobrepostos e ilegíveis quando próximos.
+Pedido explícito: "se for necessário deixa apenas o valor maior".
+- frontend/src/components/Charts/LineValueLabels.jsx: no primeiro/
+  último ponto de cada linha, o texto passou a alinhar para DENTRO do
+  gráfico (`start`/`end` em vez de `middle`), em vez de ficar cortado
+  em cima do eixo Y. Quando dois pontos da mesma categoria ficam a
+  menos de `MIN_VERTICAL_GAP` (14px) um do outro, só o rótulo do maior
+  valor é desenhado.
+- frontend/src/components/Charts/BarValueLabels.jsx: mesma lógica de
+  colisão para barras vizinhas (varrimento esquerda->direita,
+  `MIN_HORIZONTAL_GAP`), mantendo só o rótulo do maior valor quando
+  colidem.
+
+c) Prioridade verde-sobre-vermelho no critério de colisão
+Reportado com screenshot: no SLA1 do AIOPER, um valor vermelho
+("Sem Justificações") ficou escolhido sobre um verde
+("Com Justificações") quase igual, por ser ligeiramente maior — pedido
+explícito do utilizador: "meter sempre os valores positivos realçados
+em vez dos negativos".
+- LineValueLabels.jsx / BarValueLabels.jsx: nova função `pickWinner()`
+  — quando os dois rótulos em colisão são exatamente as cores
+  GOOD_COLOR (#0FA811) e BAD_COLOR (#E21B23) já usadas em todo o
+  projeto para "bom"/"mau", o verde ganha SEMPRE, independentemente do
+  valor; para qualquer outro par de cores (sem esse significado
+  semântico), mantém-se o critério antigo (maior valor).
+
+
+9. REVISÃO GERAL DO CÓDIGO PRODUZIDO NESTA SESSÃO
+--------------------------------------------------------
+Pedido do utilizador, depois de todo o trabalho acima: "volta a ver o
+código todo e o que achares necessário altera e melhora" — revisão
+própria, sem lista de bugs dada, com autorização explícita para
+corrigir diretamente em vez de só reportar.
+
+Bugs reais encontrados e corrigidos (não só estilo):
+
+a) `sqlite3.IntegrityError` não tratado no CRUD de equipa —
+   backend/services/team_service.py `add_member()`/`update_member()`
+   passaram a apanhar duplicados de nome/username e devolver um erro
+   compreensível (`ValueError` -> HTTP 400) em vez de rebentar com 500;
+   `team` passou a ser validado (só "PT"/"BR"/vazio aceites).
+
+b) Bot AIOPS a aparecer DUAS VEZES como "operador" diferente — a
+   coluna "Técnico" de gcc_abertos traz o nome bruto do ServiceNow
+   ("AIOPS Integração Snowp14"), enquanto CI's/Resolvidos traduzem o
+   username curto do bot ("SAAIOPSP14") para o nome canónico gravado
+   em team_members ("AIOPS") via `username_to_tecnico()` — o mesmo
+   bot ficava fragmentado em duas identidades diferentes consoante a
+   fonte de dado, inflacionando a contagem de "operadores" em
+   EquipaTab.jsx (mostrava "2 membros" na equipa AIOPS) e desenhando
+   duas linhas separadas na Timeline.
+   - `team_service.get_usuarios()` passou a excluir o bot (antes
+     entrava também como "operador humano", duplicando-se na query de
+     Despromovidos); `username_to_tecnico()` passou a resolver contas
+     de bot diretamente para o nome canónico, sem o sufixo " Claranet"
+     (antes essa lógica só existia, duplicada, dentro de ci_service.py
+     — agora simplificado para reutilizar team_service).
+   - Nova `team_service.normalize_bot_name(nome)`: colapsa qualquer
+     nome que comece por "AIOPS" para o nome canónico do bot. Aplicada
+     em TODOS os sítios que ainda liam a coluna "Técnico"/"Opened by"
+     em bruto: `operational_activity_service._abertos_events()`,
+     `timeline_service._events()` (o stream "inc" da Timeline),
+     `dashboard_service.get_incidents_list()` (coluna "Quem abriu" da
+     Lista de Incidentes) e `team_service.get_team_activity()`.
+   - Verificado depois da correção, direto contra a BD real
+     (2026-07): uma única entrada "AIOPS" em
+     `operational_activity.individual`, em `team_activity`, na Lista
+     de Incidentes e nas sessões da Timeline — antes havia sempre duas
+     variantes do mesmo bot nesses 4 sítios.
+
+c) `team_service.update_member()` não conseguia LIMPAR a equipa de
+   alguém — o seletor "—" do painel "Gestão de Equipa" (Base de Dados)
+   envia `team: null` para apagar a equipa PT/BR de uma pessoa, mas a
+   função filtrava TODOS os valores `None` antes de montar o UPDATE,
+   incluindo os campos que legitimamente podem ser limpos (`team`/
+   `username`) — o pedido dava 200 OK mas não mudava nada na BD,
+   parecendo funcionar e depois "voltando atrás" ao reler a lista.
+   Corrigido para aceitar `None` explícito nesses dois campos
+   nulláveis, mantendo a proteção para `name` (não pode ficar vazio,
+   é NOT NULL na base de dados) e para os checkboxes (nunca fazem
+   sentido a `null`). Testado a sério: limpar equipa, limpar username,
+   e tentar gravar nome vazio (corretamente recusado).
+
+Ficheiros revistos sem alterações necessárias (confirmados corretos):
+backend/services/auth_service.py, routers/db_admin.py, routers/turnos.py,
+services/db_admin_service.py (proteção contra SQL injection validada:
+nome de tabela sempre revalidado contra `sqlite_master` antes de
+qualquer SQL), services/history_service.py (todos os endpoints),
+services/dashboard_service.py, routers/dashboard.py, routers/team.py,
+components/CentralOperacional/{EquipaTab,TimelineTab,EquilibrioTab,
+AiopsCiTab,IncidentsListTab}.jsx, Tables/GroupedMonthlyTable.jsx,
+Charts/{LineValueLabels,BarValueLabels}.jsx,
+utils/{operationalActivityCalc,equilibrioCalc}.js.
+
+Validação: `python -m py_compile` em todos os ficheiros backend
+tocados; testes diretos contra a `dashboard.db` real confirmando
+`get_range_summary`, `get_incidents_list` e `get_operational_timeline`
+consistentes entre si (uma única identidade "AIOPS" em todos);
+regressão de `kpis`/`ci_aioper_summary` sem mudanças inesperadas.
+
+Deixado de propósito (fora de âmbito desta revisão, pré-existente e
+inofensivo): `enrich_sys_report_template()` em transform.py aplica
+`exclude_hidden_technicians`/`exclude_canceled_incidents` uma segunda
+vez, redundante com o filtro já feito antes em history_service.py —
+idempotente (o segundo filtro não muda nada), só gasta CPU à toa; e
+`services/operators_service.py` (página "Report SLAs", anterior a esta
+sessão) agrupa pela coluna "Técnico" em bruto, herdando o mesmo padrão
+do bot fragmentado — fora do âmbito desta revisão porque não foi
+tocado nesta sessão, mas fica sinalizado caso valha a pena alinhar no
+futuro.
+
+ATUALIZAÇÃO (mesmo dia) — 2ª RONDA DE REVISÃO (4 frentes em paralelo:
+backend restante, frontend restante, segurança/autenticação,
+performance/consistência — cada achado relido e confirmado por um
+segundo agente antes de ser aceite, só pra não corrigir coisas que
+afinal já estavam bem): 16 candidatos, 15 confirmados, 1 rejeitado.
+Corrigidos os que valiam a pena; os 2 mais invasivos (refactors de
+performance de baixo impacto) ficaram documentados mas não tocados.
+
+Correções aplicadas:
+
+a) `quality_service.get_sem_evento_breakdown()` indexava
+   `df["u_first_occurrence"]` sem verificar se a coluna existe — se o
+   export do ServiceNow voltar a não trazer o campo (já aconteceu uma
+   vez nesta app), isto rebentava com KeyError não tratado em quase
+   todos os endpoints do dashboard (a função corre dentro de
+   `_build_summary`, chamada por `get_monthly_summary`/
+   `get_range_summary`). Corrigido com a mesma rede de segurança já
+   usada em `transform.add_sla_columns` para o mesmo caso.
+
+b) Bot AIOPS fragmentado em MAIS DOIS sítios que a correção da secção 9
+   não tinha apanhado (achados de forma independente por esta ronda,
+   com o mesmo padrão já corrigido antes):
+   - `services/operators_service.py` (`get_operators_summary`/
+     `get_operator_detail`, página "Report SLAs" > Operadores) —
+     agrupava/filtrava pela coluna "Técnico" em bruto.
+   - `services/quality_service.py` (`get_incidents_by_sla_status`,
+     modal de incidentes ao clicar num card SLA do Report SLAs) —
+     devolvia o "tecnico" sem normalizar.
+   Ambos corrigidos com `team_service.normalize_bot_name()`, igual ao
+   resto. Verificado: uma única entrada "AIOPS" em `operators_summary`
+   e nos incidentes devolvidos por `get_incidents_by_status`.
+
+c) `GET /analytics/despromovidos` (endpoint antigo, usado só pela
+   página legada /reports/advanced-sla) ficou permanentemente morto
+   desde a limpeza de cache.py de 2026-08-05 (a chave nunca mais é
+   escrita em CACHE) mas continuava a devolver "cache ainda não
+   populado" — mensagem enganosa, parece um problema transitório
+   quando na verdade é definitivo (o dado real agora é servido por
+   GET /api/major-incs). Adicionado a `_DISABLED_TABLE_ERRORS` em
+   cache.py com uma mensagem honesta a apontar para o substituto.
+
+d) `INITIAL_ADMIN_USERS` (.env) nunca era lido em lado nenhum —
+   `team_service.seed_if_empty()` só migrava admins de uma tabela
+   antiga `app_admins`, que não existe numa instalação de raiz. Numa
+   instalação nova, ninguém ficaria admin e não haveria forma de criar
+   o primeiro (o próprio painel de admins é admin-only). Corrigido:
+   `seed_if_empty()` agora também lê `INITIAL_ADMIN_USERS` como semente
+   de admins. Testado com uma BD descartável simulando instalação de
+   raiz — confirmado que o username configurado fica admin.
+
+e) `AUTH_DEV_BYPASS_USER` já está ligado no `.env` real deste checkout,
+   apontando pra uma conta de admin real, sem nenhum `.env.example` no
+   repositório (o README manda `cp .env.example .env`, ficheiro que não
+   existia) — caminho plausível pra esse bypass ir parar a um deploy
+   real por engano, copiando este `.env` já preenchido em vez de um
+   template limpo. Duas correções aditivas, sem tocar no `.env` real
+   (que continua a ser o ambiente de trabalho atual, decisão do
+   utilizador):
+   - `backend/.env.example` (novo): mesma estrutura, credenciais e
+     bypass em branco/comentado por omissão.
+   - `main.py`: aviso ALTO no arranque (log de warning) sempre que
+     `AUTH_DEV_BYPASS_USER` estiver definido — nunca mais passa
+     despercebido nos logs do servidor.
+
+f) `major_incs_service.py` tinha a mesma fórmula de janela de datas
+   (fim do dia inclusive) copiada 3 vezes (despromovidos + as 2 fontes
+   de Calls). Extraída para `_range_bounds()`, uma função só — reduz o
+   risco de as 3 divergirem se a regra mudar um dia. Comportamento
+   idêntico (é literalmente a mesma conta), confirmado recalculando
+   `get_major_incs_summary` depois da mudança.
+
+g) `history_service.get_aioper_trend()` relia as tabelas inteiras
+   "gcc_abertos"/"justificacoes" da BD a CADA mês do intervalo pedido
+   (ex: 12 vezes num ano), em vez de uma vez só. Corrigido: lidas uma
+   vez antes do ciclo, cada mês agora só filtra o que já está em
+   memória. Testado com/sem filtro de região — números idênticos aos
+   de antes da mudança.
+
+h) `frontend/src/pages/CentralOperacional.jsx` não tratava `isError`
+   da sua única query (ao contrário de todas as outras páginas) — um
+   erro do backend mostrava "0 incidentes" em vez de um aviso de erro.
+   Corrigido, mesmo padrão já usado em AIOper.jsx.
+
+i) `frontend/src/pages/AIOper.jsx`: a segunda query (tendência do
+   AIOPER) também não tinha tratamento de erro próprio — um erro nela
+   deixava os 3 gráficos de SLA em branco sem aviso nenhum, enquanto o
+   resto da página parecia carregada. Adicionado aviso próprio pra essa
+   secção.
+
+j) `frontend/src/App.jsx` não tinha rota "apanha-tudo" — uma URL errada
+   ou desatualizada dava página em branco (sem sidebar, sem header, sem
+   aviso nenhum). Adicionada rota `path="*"` a redirecionar para "/".
+
+k) `frontend/src/pages/DatabaseViewer.jsx`: clicar no cabeçalho duma
+   coluna só ordenava as 50 linhas da PÁGINA atual (paginação já vem do
+   servidor), não a tabela toda — visualmente parecia um sort real
+   (seta ▲/▼ incluída), mas dava resultados errados em qualquer tabela
+   com mais de uma página (ex: procurar o valor máximo/mínimo real).
+   Corrigido como um sort a sério, no servidor:
+   - `backend/services/db_admin_service.py`: `get_table_data()` ganhou
+     `order_by`/`order_dir` — nome de coluna revalidado contra
+     `PRAGMA table_info` da própria tabela antes de entrar em SQL
+     (mesma defesa já usada pro nome da tabela).
+   - `backend/routers/db_admin.py`: parâmetros novos repassados.
+   - `frontend/src/service/dbAdminApi.js`/`DatabaseViewer.jsx`: o clique
+     no cabeçalho passou a disparar um pedido novo com o sort, em vez de
+     reordenar só o array já carregado; muda de coluna/direção volta
+     sempre à página 1 (uma "página 3 ordenada por X" deixa de fazer
+     sentido depois de mudar o critério). Testado: ordenar por "name"
+     asc/desc devolve a ordem certa sobre a tabela inteira; tentar
+     ordenar por uma coluna inventada é corretamente recusado.
+
+l) `frontend/src/utils/turnosCalc.js`: `computeEmployeeRange()` nunca
+   somava `fdsTrab`/`fdsLivre` de cada mês (só M/T/N/I/F/night/worked),
+   apesar do comentário da função dizer que somava — mascarado porque o
+   único sítio que a chama (`computeEmployeeAnnual`) recalculava esses
+   2 campos à parte por cima. Corrigido (soma agora os 2 campos também),
+   sem mudar nada no anual (continua a sobrepor com o cálculo próprio,
+   mais preciso).
+
+Documentado mas NÃO corrigido nesta ronda (impacto baixo, risco/esforço
+do refactor não compensou agora):
+- `history_service._compute_team_and_operational_activity()` chama
+  `team_service.get_team_activity()` e
+  `operational_activity_service.get_operational_activity()` sobre os
+  mesmos dados, e cada uma recalcula a mesma normalização do bot/tradução
+  de username por linha, em vez de partilhar o resultado. Sem impacto de
+  correção, só CPU a mais por pedido.
+- `operational_activity_service.py`: `team_service.team_by_name()` é
+  reconstruído até 5 vezes dentro de UMA chamada a
+  `get_operational_activity()` (uma vez por função interna), em vez de
+  uma vez só passada adiante — a equipa é pequena, o custo real é
+  mínimo.
+
+Validação desta ronda: `python -m py_compile` em todos os ficheiros
+backend tocados; regressão direta contra a `dashboard.db` real
+(kpis/operators_summary/team_activity/operational_activity/
+sem_evento_summary/ci_aioper_summary sem mudanças inesperadas, uma
+única "AIOPS" em todos os sítios já corrigidos); `npx eslint` (0 erros)
+e `npm run build` (sucesso) em todos os ficheiros frontend tocados.

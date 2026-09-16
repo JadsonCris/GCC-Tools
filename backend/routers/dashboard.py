@@ -1,3 +1,5 @@
+from datetime import date
+
 from fastapi import APIRouter, HTTPException
 from cache import CACHE
 from services import history_service
@@ -58,12 +60,14 @@ def available_months():
 
 
 @router.get("/monthly")
-def monthly_summary(month: str | None = None, region: str | None = None):
+def monthly_summary(month: str | None = None, region: str | None = None, hidden: str | None = None):
     """
     Resumo completo (KPIs, SLA1-4, operadores, prioridade, ferramentas,
     sem evento) filtrado por mês, lido do histórico acumulado no SQLite.
     Se `month` não for passado, usa o mês mais recente disponível.
     `region`: filtro de geografia opcional ("Global"/"Ibéria"/"Brasil").
+    `hidden`: nomes de operador (separados por vírgula) a excluir da
+    Atividade Operacional — filtro de operadores de Central Operacional.
     """
     months = history_service.get_available_months()
     if not months:
@@ -77,7 +81,7 @@ def monthly_summary(month: str | None = None, region: str | None = None):
         )
 
     try:
-        return history_service.get_monthly_summary(target_month, region=region)
+        return history_service.get_monthly_summary(target_month, region=region, hidden=hidden)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Falha ao calcular resumo mensal: {exc}") from exc
 
@@ -96,16 +100,23 @@ def date_bounds():
 
 
 @router.get("/range")
-def range_summary(start: str, end: str, region: str | None = None):
+def range_summary(start: date, end: date, region: str | None = None, hidden: str | None = None):
     """
     Resumo completo (igual ao /monthly) filtrado por um intervalo livre
     de datas 'YYYY-MM-DD' (um dia, várias semanas, vários meses, um ano
     — o que o filtro do frontend pedir), lido do histórico acumulado no
     SQLite. `region`: filtro de geografia opcional ("Global"/"Ibéria"/
-    "Brasil"), igual ao que existia no dashboard antigo.
+    "Brasil"), igual ao que existia no dashboard antigo. `hidden`: nomes
+    de operador (separados por vírgula) a excluir da Atividade Operacional.
+
+    RESOLVIDO (revisão de segurança 2026-09): `start`/`end` eram `str`
+    livres — uma data malformada só rebentava lá dentro em
+    `pd.Timestamp()`, dando 500 com stack trace em vez de um 422 limpo.
+    Usando o tipo `date` do FastAPI/Pydantic, a validação e a mensagem
+    de erro ficam automáticas, antes de tocar em qualquer lógica.
     """
     try:
-        return history_service.get_range_summary(start, end, region=region)
+        return history_service.get_range_summary(start.isoformat(), end.isoformat(), region=region, hidden=hidden)
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=f"Dado indisponível: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
@@ -113,7 +124,7 @@ def range_summary(start: str, end: str, region: str | None = None):
 
 
 @router.get("/sla-trend")
-def sla_trend(start: str, end: str, region: str | None = None):
+def sla_trend(start: date, end: date, region: str | None = None):
     """
     SLA1-4 mês a mês, cobrindo só o intervalo [start,end] escolhido no
     filtro de datas (RESOLVIDO 2026-08: antes mostrava sempre o
@@ -122,13 +133,28 @@ def sla_trend(start: str, end: str, region: str | None = None):
     endpoints.
     """
     try:
-        return {"months": history_service.get_sla_trend(start, end, region=region)}
+        return {"months": history_service.get_sla_trend(start.isoformat(), end.isoformat(), region=region)}
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Falha ao calcular tendência: {exc}") from exc
 
 
+@router.get("/aioper-trend")
+def aioper_trend(start: date, end: date, region: str | None = None):
+    """
+    SLA1/SLA2/Prioridade mês a mês, só para incidentes abertos pelo
+    AIOPER — mesmos painéis do Report SLAs, aplicados só ao bot. Usado
+    pela view AIOPER.
+    """
+    try:
+        return {"months": history_service.get_aioper_trend(start.isoformat(), end.isoformat(), region=region)}
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=f"Dado indisponível: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao calcular tendência do AIOPER: {exc}") from exc
+
+
 @router.get("/incidents-by-status")
-def incidents_by_status(status: str, start: str, end: str, region: str | None = None):
+def incidents_by_status(status: str, start: date, end: date, region: str | None = None):
     """
     Lista de incidentes por trás de cada card SLA Cumprido ("ok") /
     Falhado ("nok") / Justificado ("justificados") do Report SLAs — usado
@@ -137,8 +163,40 @@ def incidents_by_status(status: str, start: str, end: str, region: str | None = 
     if status not in ("ok", "nok", "justificados"):
         raise HTTPException(status_code=422, detail="status inválido: use 'ok', 'nok' ou 'justificados'.")
     try:
-        return {"incidents": history_service.get_incidents_by_status(start, end, status, region=region)}
+        return {"incidents": history_service.get_incidents_by_status(start.isoformat(), end.isoformat(), status, region=region)}
     except ValueError as exc:
         raise HTTPException(status_code=503, detail=f"Dado indisponível: {exc}") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=500, detail=f"Falha ao calcular incidentes por status: {exc}") from exc
+
+
+@router.get("/incidents-list")
+def incidents_list(start: date, end: date, region: str | None = None):
+    """
+    Lista de TODOS os incidentes do período ("Lista de Incidentes") —
+    número, abertura, descrição, quem abriu, quem resolveu, nº de CI's e
+    timestamp do CI mais recente. O frontend filtra/ordena/exporta
+    localmente (mesmo padrão de /dashboard/incidents-by-status).
+    """
+    try:
+        return {"incidents": history_service.get_incidents_list(start.isoformat(), end.isoformat(), region=region)}
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=f"Dado indisponível: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao calcular lista de incidentes: {exc}") from exc
+
+
+@router.get("/timeline")
+def operational_timeline(year: int, month: int, region: str | None = None, hidden: str | None = None):
+    """
+    Sessões de trabalho detetadas por operador no mês indicado — Timeline
+    e Equilíbrio de Turnos de Central Operacional (seletor de mês próprio,
+    independente do filtro de período global da página). `hidden`: nomes
+    de operador (separados por vírgula) a excluir.
+    """
+    try:
+        return {"sessions": history_service.get_operational_timeline(year, month, region=region, hidden=hidden)}
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail=f"Dado indisponível: {exc}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Falha ao calcular timeline: {exc}") from exc

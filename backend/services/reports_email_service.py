@@ -16,6 +16,7 @@ gracioso (endereços fixos / cabeçalho só texto) se os ficheiros reais
 ainda não tiverem sido colocados lá (não estão no git — contêm dados
 reais, ver .gitignore).
 """
+import html
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -25,6 +26,24 @@ import pythoncom
 import win32com.client
 
 logger = logging.getLogger("reports_email")
+
+
+def _esc(value) -> str:
+    """
+    Escapa um valor antes de o meter no HTML do e-mail (& < > " ').
+    RESOLVIDO (bug real, revisão de segurança 2026-09): nenhuma destas
+    funções escapava nada antes disto — células de tabela vêm de exports
+    do ServiceNow (texto livre em "Short description"/"Motivo"/etc.) ou
+    de entradas manuais no CAB (ManualEntryForm.jsx no frontend, sem
+    validação nenhuma), então um "<"/">" nesses campos já bastava para
+    partir a tabela do e-mail, e um valor malicioso podia injetar
+    HTML/links no rascunho gerado no Outlook antes de alguém o rever e
+    enviar. `mail.HTMLBody` é a única função de e-mail deste ficheiro
+    afetada — `ponto_situacao_service.gerar_email_ponto_situacao` usa
+    `mail.Body` (texto simples, sem interpretação de HTML), não precisa
+    disto.
+    """
+    return html.escape(str(value)) if value is not None else ""
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REPORTS_DATA_DIR = BASE_DIR / "data" / "reports"
@@ -110,7 +129,7 @@ def montar_corpo_html_p1_semanal(linhas: list[dict]) -> str:
     )
     html += "<tr style='background-color:#1F3864; color:#FFFFFF;'>"
     for cab in cabecalhos:
-        html += f"<th style='padding:10px 12px; text-align:left; border:1px solid #14274e;'>{cab}</th>"
+        html += f"<th style='padding:10px 12px; text-align:left; border:1px solid #14274e;'>{_esc(cab)}</th>"
     html += "</tr>"
 
     for item in linhas:
@@ -120,7 +139,7 @@ def montar_corpo_html_p1_semanal(linhas: list[dict]) -> str:
             estilo = "padding:8px 12px; border:1px solid #BDD7EE; color:#1F3864;"
             if cab == coluna_number:
                 estilo += " font-weight:bold;"
-            html += f"<td style='{estilo}'>{val if val is not None else ''}</td>"
+            html += f"<td style='{estilo}'>{_esc(val)}</td>"
         html += "</tr>"
 
     html += "</table>"
@@ -157,7 +176,7 @@ def montar_corpo_html_cab(tipo: str, texto_inicio: str, texto_fim: str, changes:
 
     periodo_txt = (
         f"A execução da lista de CHG abaixo ocorrerá entre as 18:00 Horas de "
-        f"{texto_inicio} e as 07:00 de {texto_fim}."
+        f"{_esc(texto_inicio)} e as 07:00 de {_esc(texto_fim)}."
     )
 
     if not changes:
@@ -182,10 +201,10 @@ def montar_corpo_html_cab(tipo: str, texto_inicio: str, texto_fim: str, changes:
             cabecalho = " - ".join(filter(None, [numero, ci, desc]))
             changes_html += (
                 f"<div style='margin:12px 0; padding:10px 0; border-bottom:1px solid #e0e0e0;'>"
-                f"<p style='margin:0 0 4px 0; font-size:16px; font-weight:bold; color:#222;'>{cabecalho}</p>"
+                f"<p style='margin:0 0 4px 0; font-size:16px; font-weight:bold; color:#222;'>{_esc(cabecalho)}</p>"
                 f"<p style='margin:0; font-size:14px; color:#555;'>"
-                f"Unavailability Start Date: {inicio}<br>"
-                f"Unavailability End Date: {fim}"
+                f"Unavailability Start Date: {_esc(inicio)}<br>"
+                f"Unavailability End Date: {_esc(fim)}"
                 f"</p></div>"
             )
 
@@ -277,7 +296,7 @@ def montar_corpo_html(regiao: str, secroes_dados: dict[str, list[dict]]) -> str:
         html += (
             f"<p style='margin-top:20px;margin-bottom:8px;font-weight:bold;'>"
             f"<div style='background-color:#D9D9D9;padding:2px 4px;font-weight:bold;'>"
-            f"{titulo_secao}</div></p>"
+            f"{_esc(titulo_secao)}</div></p>"
         )
         if not linhas:
             html += "<p style='margin-left:15px;'>* Não foram identificadas situações.</p><br>"
@@ -290,12 +309,12 @@ def montar_corpo_html(regiao: str, secroes_dados: dict[str, list[dict]]) -> str:
             cabecalhos = linhas[0].keys()
             html += "<tr style='background-color:#28FF52;color:#000000;font-weight:bold;'>"
             for cab in cabecalhos:
-                html += f"<th style='padding:6px;text-align:left;border:1px solid #000;'>{cab}</th>"
+                html += f"<th style='padding:6px;text-align:left;border:1px solid #000;'>{_esc(cab)}</th>"
             html += "</tr>"
             for item in linhas:
                 html += "<tr style='background-color:#FFFFFF;'>"
                 for val in item.values():
-                    html += f"<td style='padding:5px;border:1px solid #000;'>{val if val is not None else ''}</td>"
+                    html += f"<td style='padding:5px;border:1px solid #000;'>{_esc(val)}</td>"
                 html += "</tr>"
             html += "</table><br>"
 

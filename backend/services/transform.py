@@ -14,19 +14,17 @@ import re
 import numpy as np
 import pandas as pd
 
+from . import team_service
 from .keywords import KEYWORD_LIST
 from .justificacoes_service import parse_justificacoes, get_justified_map
 
 logger = logging.getLogger("transform")
 
-# Lista fixa (além da convenção de sufixo "OM" — ver add_grupo_column)
-# pra gente da Monitorização cujo nome no ServiceNow não segue esse
-# padrão. Removi "Nuno Miguel Melo Machado Azevedo Martins Claranet"
-# (nome antigo/errado, não batia com a convenção real confirmada: o
-# Nuno é identificado pelo sufixo "OM" no nome, tipo "Nuno Martins OM").
-MONITORIZACAO_NOMES = {
-    "DENIS TEXEIRA CLARANET",
-}
+# Override de classificação "Monitorização" (pra gente cujo nome não
+# segue a convenção de sufixo "OM" — ver add_grupo_column) e a lista de
+# técnicos escondidos de todas as métricas (HIDDEN_TECNICOS) vivem agora
+# em team_service (tabela team_members) — unificado ali com o resto do
+# roster da equipa, ver team_service.py.
 
 # Contas de automação/IA — classificadas num grupo à parte (AIOPER), nem
 # Operação nem Monitorização.
@@ -47,25 +45,20 @@ AIOPER_CHANNEL_VALUE = "AUTOMATIC"
 # do bot.
 AIOPER_PREFIX = "AIOPS"
 
-# Técnicos que não devem aparecer em NENHUMA métrica (contas de
-# gestão/pessoais que abrem incidentes mas não fazem parte da operação
-# medida). Comparação case-insensitive e sem espaços nas pontas.
-HIDDEN_TECNICOS = {
-    "LUÍS MIGUEL MARTINS",
-}
-
 
 def exclude_hidden_technicians(df: pd.DataFrame, column: str = "Opened by") -> pd.DataFrame:
     """
-    Remove linhas dos técnicos de HIDDEN_TECNICOS. Precisa ser chamada
-    ANTES de qualquer cálculo/enrich, tanto na tabela principal (GCC
-    Abertos) quanto na SLA3 (P1s) — senão a pessoa some das métricas
-    "por operador" mas continua contando nos totais agregados.
+    Remove linhas dos técnicos marcados como "oculto" em team_service
+    (tabela team_members — contas de gestão/pessoais que abrem
+    incidentes mas não fazem parte da operação medida). Precisa ser
+    chamada ANTES de qualquer cálculo/enrich, tanto na tabela principal
+    (GCC Abertos) quanto na SLA3 (P1s) — senão a pessoa some das
+    métricas "por operador" mas continua contando nos totais agregados.
     """
     if column not in df.columns:
         return df
     normalized = df[column].astype(str).str.strip().str.upper()
-    return df[~normalized.isin(HIDDEN_TECNICOS)].copy()
+    return df[~normalized.isin(team_service.hidden_names_upper())].copy()
 
 
 def exclude_canceled_incidents(df: pd.DataFrame, column: str = "State") -> pd.DataFrame:
@@ -242,8 +235,8 @@ def add_grupo_column(df: pd.DataFrame) -> pd.DataFrame:
     negócio: é a convenção real de nome pra gente da Monitorização (ex:
     "Nuno Martins OM"), não uma coincidência. Comparação
     case-insensitive pra não depender de a instância manter o "OM" em
-    maiúsculas sempre. Também cai em Monitorização quem estiver na lista
-    fixa MONITORIZACAO_NOMES (gente cujo nome não segue essa convenção).
+    maiúsculas sempre. Também cai em Monitorização quem tiver o override
+    marcado em team_service (gente cujo nome não segue essa convenção).
     Senão, "Operação".
 
     Vetorizado (otimização 2026-08) — mesma prioridade AIOPER > Monitorização
@@ -269,10 +262,10 @@ def add_grupo_column(df: pd.DataFrame) -> pd.DataFrame:
         channel = df["channel"].fillna("").astype(str).str.strip().str.upper()
         is_aioper = is_aioper | (channel == AIOPER_CHANNEL_VALUE)
 
-    # MONITORIZACAO_NOMES compara com o nome tal como veio (não
-    # maiúsculas) — mesmo comportamento do `tecnico in MONITORIZACAO_NOMES`
-    # original, preservado aqui de propósito.
-    is_monitorizacao = tecnico_upper.str.endswith("OM") | tecnico.isin(MONITORIZACAO_NOMES)
+    # O override de team_service compara com o nome tal como veio (não
+    # maiúsculas) — mesmo comportamento do antigo `tecnico in
+    # MONITORIZACAO_NOMES`, preservado aqui de propósito.
+    is_monitorizacao = tecnico_upper.str.endswith("OM") | tecnico.isin(team_service.monitorizacao_override_names())
 
     df["Grupo"] = np.select([is_aioper, is_monitorizacao], ["AIOPER", "Monitorização"], default="Operação")
     return df

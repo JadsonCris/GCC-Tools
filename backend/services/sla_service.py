@@ -153,11 +153,26 @@ def get_p1_task_sets(df: pd.DataFrame) -> tuple[set, set]:
     (abriu como P1); se QUALQUER linha seguinte é de prioridade
     diferente, entra também em `bad_tasks` (P1 despromovido depois).
 
-    Devolve `(p1_tasks, bad_tasks)` — reaproveitado tanto por SLA4
-    (get_sla4_summary, todas as tasks de origem GCC) quanto por
-    major_incs_service.py (mesma lógica, mas sobre a tabela
-    "despromovidos", filtrada por autor da SLA em vez de origem do
-    incidente — schema idêntico, ver prepare_sla_rows).
+    Devolve `(p1_tasks, bad_tasks)` — usado por SLA4 (get_sla4_summary,
+    todas as tasks de origem GCC). NÃO é mais usado por
+    major_incs_service.py: RESOLVIDO 2026-09, "P1's Despromovidos" dava
+    falso positivo com esta reconstrução de cronologia quando o
+    Despromovidos_URL só tinha uma vista PARCIAL da história da task
+    (ver major_incs_service.get_despromovidos_detail) — trocado lá pelo
+    `_status` de sla3_incidentes, mais fiável.
+
+    RESOLVIDO (otimização 2026-09-16): a versão anterior fazia um
+    `groupby("task")` e chamava `.sort_values("start_time")` UMA VEZ POR
+    GRUPO (milhares de tasks = milhares de sorts pequenos, cada um com o
+    overhead fixo de montar a maquinaria de sort do pandas) — medido como
+    o maior gargalo da app (>60% do tempo de `get_range_summary` no
+    intervalo completo). Substituído por UM sort global (`sort_values`
+    com as duas colunas, ["task","start_time"]) mais dois `transform`
+    vetorizados (reduções nativas do pandas, sem loop Python por grupo) —
+    mesmo resultado (validado com diff de sets p1_tasks/bad_tasks contra
+    a versão antiga, dados reais + casos sintéticos com empates de
+    start_time e valores em falta), ~100x mais rápido nos dados reais
+    desta app (2.2s -> 0.02s no SLA4 do intervalo completo).
     """
     bad_tasks = set()
     p1_tasks = set()
@@ -165,13 +180,23 @@ def get_p1_task_sets(df: pd.DataFrame) -> tuple[set, set]:
     if "task" not in df.columns or "_priority" not in df.columns:
         return p1_tasks, bad_tasks
 
-    for task, group in df.dropna(subset=["_priority", "start_time"]).groupby("task"):
-        priorities = group.sort_values("start_time")["_priority"].tolist()
-        if not priorities or priorities[0] != 1:
-            continue
-        p1_tasks.add(task)
-        if any(p != 1 for p in priorities[1:]):
-            bad_tasks.add(task)
+    d = df.dropna(subset=["_priority", "start_time"])
+    if d.empty:
+        return p1_tasks, bad_tasks
+
+    d = d.sort_values(["task", "start_time"], kind="stable")
+    grouped_priority = d.groupby("task")["_priority"]
+    is_p1_row = grouped_priority.transform("first") == 1
+    p1_tasks = set(d.loc[is_p1_row, "task"].unique())
+    if not p1_tasks:
+        return p1_tasks, bad_tasks
+
+    # Dentro de uma task P1 (primeira linha == 1), "bad" = alguma OUTRA
+    # linha com prioridade != 1 — como a primeira linha já é sempre 1
+    # nesse subconjunto, "alguma linha != 1 no grupo todo" é equivalente
+    # a "alguma linha != 1 nas seguintes" (a primeira nunca conta).
+    any_non_p1 = d["_priority"].ne(1).groupby(d["task"]).transform("any")
+    bad_tasks = set(d.loc[is_p1_row & any_non_p1, "task"].unique())
 
     return p1_tasks, bad_tasks
 

@@ -36,12 +36,12 @@ export default function Turnos() {
 
   const queryClient = useQueryClient();
 
-  const { data: employees = [], isLoading: loadingEmployees } = useQuery({
+  const { data: employees = [], isLoading: loadingEmployees, isError: isEmployeesError } = useQuery({
     queryKey: ["turnos-employees"],
     queryFn: getEmployees,
   });
 
-  const { data: yearShifts = {}, isLoading: loadingShifts } = useQuery({
+  const { data: yearShifts = {}, isLoading: loadingShifts, isError: isShiftsError } = useQuery({
     queryKey: ["turnos-shifts", year],
     queryFn: () => getShiftsForYear(year),
   });
@@ -52,6 +52,11 @@ export default function Turnos() {
   };
 
   const loading = loadingEmployees || loadingShifts;
+  // RESOLVIDO (bug real): sem isto, uma falha no backend caía nos
+  // defaults (`employees=[]`/`yearShifts={}`) e renderizava uma escala
+  // "vazia mas válida" — 0 colaboradores, alerta de falta de cobertura
+  // em todos os dias — em vez de avisar que os dados não carregaram.
+  const isError = isEmployeesError || isShiftsError;
   const selectClass = "px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-800 dark:text-white text-sm";
 
   return (
@@ -104,8 +109,13 @@ export default function Turnos() {
 
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-b-xl rounded-tr-xl p-5 -mt-6 pt-8">
         {loading && <p className="text-slate-500 text-sm">A carregar...</p>}
+        {!loading && isError && (
+          <p className="text-rose-500 dark:text-rose-400 text-sm">
+            Erro ao carregar colaboradores/turnos. Tenta recarregar a página.
+          </p>
+        )}
 
-        {!loading && tab === "escala" && (
+        {!loading && !isError && tab === "escala" && (
           <EscalaTab
             key={`${year}-${month}`}
             employees={employees}
@@ -116,7 +126,7 @@ export default function Turnos() {
             onDirtyChange={setEscalaDirty}
           />
         )}
-        {!loading && tab === "stats-mensal" && (
+        {!loading && !isError && tab === "stats-mensal" && (
           <EstatisticasTab
             employees={employees}
             yearShifts={yearShifts}
@@ -126,7 +136,7 @@ export default function Turnos() {
             isAnnual={false}
           />
         )}
-        {!loading && tab === "stats-anual" && (
+        {!loading && !isError && tab === "stats-anual" && (
           <EstatisticasTab
             employees={employees}
             yearShifts={yearShifts}
@@ -136,7 +146,7 @@ export default function Turnos() {
             isAnnual={true}
           />
         )}
-        {!loading && tab === "individual" && (
+        {!loading && !isError && tab === "individual" && (
           <MetricasIndividuaisTab employees={employees} yearShifts={yearShifts} year={year} />
         )}
       </div>

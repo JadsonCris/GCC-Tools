@@ -1,4 +1,6 @@
 # routers/operators.py
+from datetime import date
+
 from fastapi import APIRouter, HTTPException
 
 from services import history_service
@@ -20,13 +22,13 @@ def operators_summary(month: str | None = None):
 def operator_detail(
     tecnico: str,
     month: str | None = None,
-    start: str | None = None,
-    end: str | None = None,
+    start: date | None = None,
+    end: date | None = None,
     region: str | None = None,
 ):
     try:
         if start and end:
-            df = history_service.get_enriched_gcc_abertos_range(start, end, region=region)
+            df = history_service.get_enriched_gcc_abertos_range(start.isoformat(), end.isoformat(), region=region)
         else:
             df = history_service.get_enriched_gcc_abertos(month, region=region)
     except LookupError as exc:

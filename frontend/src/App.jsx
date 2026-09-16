@@ -4,6 +4,7 @@ import { Routes, Route, Navigate } from "react-router-dom";
 // Layouts Dedicados
 import MainLayout from "./layouts/MainLayout.jsx";
 import ReportsLayout from "./layouts/ReportsLayout.jsx";
+import RequireAdmin from "./components/RequireAdmin.jsx";
 
 // Páginas — carregadas sob demanda (React.lazy + code-splitting do Vite)
 // em vez de tudo no bundle inicial. Antes disto, todas as 12 páginas
@@ -18,6 +19,7 @@ const CentralOperacional = lazy(() => import("./pages/CentralOperacional.jsx"));
 const AIOper = lazy(() => import("./pages/AIOper.jsx"));
 const MajorIncs = lazy(() => import("./pages/MajorIncs.jsx"));
 const Turnos = lazy(() => import("./pages/Turnos.jsx"));
+const DatabaseViewer = lazy(() => import("./pages/DatabaseViewer.jsx"));
 const AdvancedSla = lazy(() => import("./pages/AdvancedSla.jsx"));
 const Report9Manha = lazy(() => import("./pages/ReportPt.jsx"));
 const CAB = lazy(() => import("./pages/CAB.jsx"));
@@ -45,7 +47,8 @@ function App() {
           <Route path="/services/central-operacional" element={<CentralOperacional />} />
           <Route path="/services/aioper" element={<AIOper />} />
           <Route path="/services/major-incs" element={<MajorIncs />} />
-          <Route path="/services/turnos" element={<Turnos />} />
+          <Route path="/services/turnos" element={<RequireAdmin><Turnos /></RequireAdmin>} />
+          <Route path="/services/database" element={<RequireAdmin><DatabaseViewer /></RequireAdmin>} />
         </Route>
 
         {/* 3. Ecossistema do Dashboard de RELATÓRIOS (Usa o ReportsLayout) */}
@@ -58,6 +61,9 @@ function App() {
           <Route path="/reports/ponto-situacao/tl" element={<PontoSituacaoTL />} />
           <Route path="/reports/splunk-validacao" element={<SplunkValidacao />} />
         </Route>
+
+        {/* 4. Qualquer rota que não bata em nenhuma acima (URL errada/antiga) */}
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </Suspense>
   );

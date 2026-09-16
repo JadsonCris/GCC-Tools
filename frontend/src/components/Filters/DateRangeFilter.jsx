@@ -38,6 +38,15 @@ function formatDate(date) {
   return date.toLocaleDateString("pt-PT", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+function monthLabel(date) {
+  const label = date.toLocaleDateString("pt-PT", { month: "short" }).replace(".", "");
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
+function endOfMonth(date) {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0);
+}
+
 function clampRange(offset, minOffset, maxOffset) {
   return Math.min(Math.max(offset, minOffset), maxOffset);
 }
@@ -158,6 +167,44 @@ export default function DateRangeFilter() {
     commitRange([start, totalDays]);
   };
 
+  // RESOLVIDO (pedido do utilizador: "uma maneira mais friendly...
+  // escolher logo os meses ou o ano"): marcas clicáveis no próprio
+  // slider (um mês = um clique no nome dele, em vez de arrastar as duas
+  // pontas à mão) + um ano inteiro por clique quando o histórico
+  // abranger mais que um. `selectMonth`/`selectYear` fixam sempre o
+  // intervalo COMPLETO desse mês/ano, cortado pelos limites reais de
+  // dados (minDate/maxDate) — um mês a meio (ex: o mês corrente, ainda
+  // incompleto) fica só até maxDate, não inventa dias futuros sem dado.
+  const selectMonth = (monthStart) => {
+    const start = clampRange(diffDays(minDate, monthStart), 0, totalDays);
+    const end = clampRange(diffDays(minDate, endOfMonth(monthStart)), 0, totalDays);
+    commitRange([start, end]);
+  };
+
+  const selectYear = (year) => {
+    const start = clampRange(diffDays(minDate, new Date(year, 0, 1)), 0, totalDays);
+    const end = clampRange(diffDays(minDate, new Date(year, 11, 31)), 0, totalDays);
+    commitRange([start, end]);
+  };
+
+  const monthMarks = [];
+  {
+    let cursor = new Date(minDate.getFullYear(), minDate.getMonth(), 1);
+    while (cursor <= maxDate) {
+      monthMarks.push(new Date(cursor));
+      cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+    }
+  }
+  const years = [...new Set(monthMarks.map((d) => d.getFullYear()))];
+
+  const isMonthActive = (monthStart) =>
+    dayRange[0] === clampRange(diffDays(minDate, monthStart), 0, totalDays) &&
+    dayRange[1] === clampRange(diffDays(minDate, endOfMonth(monthStart)), 0, totalDays);
+
+  const isYearActive = (year) =>
+    dayRange[0] === clampRange(diffDays(minDate, new Date(year, 0, 1)), 0, totalDays) &&
+    dayRange[1] === clampRange(diffDays(minDate, new Date(year, 11, 31)), 0, totalDays);
+
   const presetBtnClass = "px-3 py-1.5 rounded-lg text-xs font-medium bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 transition-colors border border-slate-300 dark:border-slate-700";
 
   return (
@@ -237,14 +284,59 @@ export default function DateRangeFilter() {
         step={1}
         disableSwap
         valueLabelDisplay="off"
+        // MUI marca a marca/label do slider como aria-hidden por padrão
+        // (assume ser só texto decorativo) — como agora tem um <button>
+        // interativo lá dentro (selectMonth), isso escondia-o de
+        // leitores de ecrã sem aviso nenhum. slotProps.markLabel
+        // sobrepõe-se ao aria-hidden fixo do MUI (spread depois dele no
+        // código-fonte do Slider).
+        slotProps={{ markLabel: { "aria-hidden": false } }}
+        marks={monthMarks.map((monthStart) => ({
+          value: clampRange(diffDays(minDate, monthStart), 0, totalDays),
+          label: (
+            <button
+              type="button"
+              onClick={() => selectMonth(monthStart)}
+              title={`Selecionar ${monthLabel(monthStart)} de ${monthStart.getFullYear()}`}
+              className={`text-[11px] font-medium px-1 rounded transition-colors ${
+                isMonthActive(monthStart)
+                  ? "text-white bg-[#4f7fff]"
+                  : "text-slate-500 dark:text-slate-400 hover:text-white hover:bg-[#4f7fff]/70"
+              }`}
+            >
+              {monthLabel(monthStart)}
+            </button>
+          ),
+        }))}
         sx={(theme) => ({
           color: "#4f7fff",
-          "& .MuiSlider-thumb": { width: 16, height: 16 },
+          "& .MuiSlider-thumb": { width: 16, height: 16, zIndex: 2 },
           "& .MuiSlider-rail": { backgroundColor: theme.palette.divider, opacity: 1 },
+          "& .MuiSlider-mark": { width: 2, height: 8, backgroundColor: theme.palette.divider },
+          "& .MuiSlider-markLabel": { top: 24 },
         })}
       />
-      <div className="flex justify-between text-[11px] text-slate-400 dark:text-slate-500 -mt-2">
+      <div className="flex items-center justify-between text-[11px] text-slate-400 dark:text-slate-500 mt-3">
         <span>{formatDate(minDate)}</span>
+        {years.length > 0 && (
+          <div className="flex gap-1.5">
+            {years.map((year) => (
+              <button
+                key={year}
+                type="button"
+                onClick={() => selectYear(year)}
+                title={`Selecionar o ano ${year}`}
+                className={`px-2 py-0.5 rounded-md font-semibold transition-colors ${
+                  isYearActive(year)
+                    ? "text-white bg-[#4f7fff]"
+                    : "text-slate-500 dark:text-slate-400 hover:text-white hover:bg-[#4f7fff]/70"
+                }`}
+              >
+                {year}
+              </button>
+            ))}
+          </div>
+        )}
         <span>{formatDate(maxDate)}</span>
       </div>
     </div>

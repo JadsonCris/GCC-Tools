@@ -28,11 +28,15 @@ class Settings:
     # nível de evento/tag, não de incidente) pro export atual, incidente a
     # incidente — mesma forma de PRINCIPAL_URL. Ver cache.py.
     INCS_CALLS_GCC_URL = os.getenv("INCS_CALLS_GCC_URL")
+    # CI_URL = Configuration Items associados a incidentes (task_ci) — 3º
+    # indicador da Atividade Operacional + view "CI's em INCs do AIOPS".
+    CI_URL = os.getenv("CI_URL")
 
     # DESPROMOVIDOS_URL não vem do .env — é construída dinamicamente em
-    # cache.py (_build_despromovidos_url) a partir de team_service.USUARIOS,
-    # pra incluir automaticamente qualquer operador novo sem precisar editar
-    # URL nenhuma à mão (pedido explícito do utilizador).
+    # cache.py (_build_despromovidos_url) a partir do roster em
+    # team_service.get_usuarios(), pra incluir automaticamente qualquer
+    # operador novo sem precisar editar URL nenhuma à mão (pedido
+    # explícito do utilizador).
 
     # --- Desativadas por agora: sem link novo da instância edpon ainda ---
     SLA3_GROUPS_URL = os.getenv("SLA3_GROUPS_URL")
@@ -61,6 +65,7 @@ class Settings:
     SN_FILENAME_USERS = os.getenv("SN_FILENAME_USERS", "users.xls")
     SN_FILENAME_AUDITKEYS = os.getenv("SN_FILENAME_AUDITKEYS", "auditkeys.xls")
     SN_FILENAME_DESPROMOVIDOS = os.getenv("SN_FILENAME_DESPROMOVIDOS", "Despromovidos_URL.xls")
+    SN_FILENAME_CI = os.getenv("SN_FILENAME_CI", "CI_URL.xls")
     SN_FILENAME_BACKLOG_INC = os.getenv("SN_FILENAME_BACKLOG_INC", "mon_backlog_incs.xls")
     SN_FILENAME_BACKLOG_RITM = os.getenv("SN_FILENAME_BACKLOG_RITM", "mon_backlog_ritm.xls")
     # JUSTIFICACOES_URL é do SharePoint (.xlsm), não do ServiceNow — não dá
@@ -89,6 +94,24 @@ class Settings:
 
     # --- CORS ---
     FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173")
+
+    # --- Autenticação (Gestão de Turnos / Base de Dados — só admins) ---
+    # A app não faz login nenhum sozinha: espera que um proxy à frente do
+    # uvicorn (ex: IIS com Windows Authentication) já tenha autenticado o
+    # utilizador e injete a identidade neste cabeçalho antes de
+    # reencaminhar o pedido. IMPORTANTE: isto só é seguro se o uvicorn
+    # NUNCA for alcançável a não ser através desse proxy — caso contrário
+    # qualquer pessoa pode forjar este cabeçalho e fingir ser admin.
+    AUTH_HEADER_NAME = os.getenv("AUTH_HEADER_NAME", "X-Remote-User")
+    # ATENÇÃO: só para desenvolvimento local (sem proxy nenhum a correr).
+    # NUNCA definir isto num deploy real — quem definir este valor no
+    # .env do servidor consegue autenticar-se como esse username sem
+    # precisar de mais nada.
+    AUTH_DEV_BYPASS_USER = os.getenv("AUTH_DEV_BYPASS_USER") or None
+    # Semente inicial da tabela app_admins (username,username,...) — só
+    # aplicada uma vez, se a tabela ainda estiver vazia (mesmo padrão de
+    # turnos_service.seed_if_empty).
+    INITIAL_ADMIN_USERS = os.getenv("INITIAL_ADMIN_USERS", "")
 
     # --- URLs de export EXCEL pros Reports (Ibéria/Brasil, CAB, P1 Semanal) ---
     # Nunca buscadas pelo backend — só devolvidas ao frontend (ver

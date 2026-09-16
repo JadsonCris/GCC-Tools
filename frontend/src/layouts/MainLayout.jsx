@@ -7,12 +7,15 @@ import {
   Bot,
   Siren,
   CalendarDays,
+  Database,
 } from "lucide-react";
 import { DateRangeProvider } from "../context/DateRangeContext.jsx";
 import ThemeToggle from "../components/ThemeToggle.jsx";
+import { useCurrentUser } from "../hooks/useCurrentUser.js";
 
 function MainLayout() {
   const location = useLocation();
+  const { isAdmin } = useCurrentUser();
 
   // Função de destaque idêntica ao padrão limpo do de Reports
   const isActive = (path) =>
@@ -65,10 +68,18 @@ function MainLayout() {
               <Siren size={18} />
               Major Incs
             </Link>
-            <Link to="/services/turnos" className={`flex items-center gap-3 ${isActive("/services/turnos")}`}>
-              <CalendarDays size={18} />
-              Gestão de Turnos
-            </Link>
+            {isAdmin && (
+              <>
+                <Link to="/services/turnos" className={`flex items-center gap-3 ${isActive("/services/turnos")}`}>
+                  <CalendarDays size={18} />
+                  Gestão de Turnos
+                </Link>
+                <Link to="/services/database" className={`flex items-center gap-3 ${isActive("/services/database")}`}>
+                  <Database size={18} />
+                  Base de Dados
+                </Link>
+              </>
+            )}
           </nav>
         </div>
 

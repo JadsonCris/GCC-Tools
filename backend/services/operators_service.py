@@ -1,11 +1,12 @@
 # services/operators_service.py
 import pandas as pd
 
-from . import dashboard_service
+from . import dashboard_service, team_service
 
 
 def get_operators_summary(df: pd.DataFrame) -> list:
-    df = df[df["Técnico"].notna() & (df["Técnico"] != "")]
+    df = df[df["Técnico"].notna() & (df["Técnico"] != "")].copy()
+    df["Técnico"] = df["Técnico"].apply(team_service.normalize_bot_name)
     rows = []
     for tecnico, grupo in df.groupby("Técnico"):
         inc = len(grupo)
@@ -42,7 +43,7 @@ def get_operator_detail(df: pd.DataFrame, tecnico: str) -> dict | None:
     só que rodando sobre o subconjunto de incidentes de UM técnico — pra
     alimentar o clique "ver dados desse operador" no frontend.
     """
-    subset = df[df["Técnico"] == tecnico]
+    subset = df[df["Técnico"].apply(team_service.normalize_bot_name) == tecnico]
     if subset.empty:
         return None
 

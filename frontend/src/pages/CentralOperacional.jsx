@@ -6,12 +6,13 @@ import KPICard from "../components/KPI/KPICard";
 import PriorityBarChartMui from "../components/Charts/PriorityBarChartMui";
 import ToolsPieChartMui from "../components/Charts/ToolsPieChartMui";
 import SourceByDayTable from "../components/Tables/SourceByDayTable";
+import GroupedMonthlyTable from "../components/Tables/GroupedMonthlyTable";
 import OperationalActivitySection from "../components/Sections/OperationalActivitySection";
 
 export default function CentralOperacional() {
   const { range, region } = useDateRange();
 
-  const { data: summary, isLoading } = useQuery({
+  const { data: summary, isLoading, isError } = useQuery({
     queryKey: ["range-summary", range?.start, range?.end, region],
     queryFn: () => getRangeSummary(range.start, range.end, region),
     enabled: !!range,
@@ -33,6 +34,9 @@ export default function CentralOperacional() {
       </div>
 
       <DateRangeFilter />
+
+      {isLoading && <p className="text-slate-500 text-sm">A carregar...</p>}
+      {isError && <p className="text-rose-500 dark:text-rose-400 text-sm">Erro ao carregar dados do backend.</p>}
 
       {/* Canal de abertura (Automático / Manual / Justificações) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -58,6 +62,20 @@ export default function CentralOperacional() {
         </div>
       </div>
 
+      {/* Incidentes Abertos por Prioridade / por Source (matriz colapsável, por mês) */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
+          <h3 className="text-slate-800 dark:text-white font-semibold mb-4">Incidentes Abertos por Prioridade</h3>
+          {isLoading && <p className="text-slate-500 text-sm">Carregando...</p>}
+          {!isLoading && <GroupedMonthlyTable data={summary?.priority_source_matrix} level1Label="Prioridade" />}
+        </div>
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
+          <h3 className="text-slate-800 dark:text-white font-semibold mb-4">Incidentes Abertos por Source</h3>
+          {isLoading && <p className="text-slate-500 text-sm">Carregando...</p>}
+          {!isLoading && <GroupedMonthlyTable data={summary?.source_priority_matrix} level1Label="Source" />}
+        </div>
+      </div>
+
       {/* Incidentes por Fonte e Dia */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
         <h2 className="text-xl font-bold text-slate-800 dark:text-white">Incidentes por Fonte e Dia</h2>
@@ -77,7 +95,14 @@ export default function CentralOperacional() {
           Incidentes abertos (por técnico) vs resolvidos (tags OK_GCC), no período selecionado.
         </p>
         {isLoading && <p className="text-slate-500 text-sm">Carregando...</p>}
-        {!isLoading && <OperationalActivitySection data={summary?.operational_activity} />}
+        {!isLoading && (
+          <OperationalActivitySection
+            data={summary?.operational_activity}
+            ciAioperSummary={summary?.ci_aioper_summary}
+            range={range}
+            region={region}
+          />
+        )}
       </div>
     </div>
   );
