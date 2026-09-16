@@ -339,6 +339,92 @@ def get_source_priority_pivot(df: pd.DataFrame) -> dict:
     return _two_level_pivot(df, "Source", "priority")
 
 
+# ServiceNow deixa este campo por preencher em templates de alerta que nunca
+# chegaram a ser configurados — confirmado nos dados reais (135 ocorrências
+# de "$c_snow_correlation_display|u$" em vez de um valor real). Tratado como
+# "sem dado", igual a vazio/nulo.
+_CORRELATION_JUNK_MARKER = "c_snow_correlation_display"
+
+
+def _tree_pivot(df: pd.DataFrame, level_cols: list[str], months: list[str]) -> list[dict]:
+    """
+    Pivot recursivo de N níveis (uma coluna já calculada por nível) x mês
+    -> contagem — generalização de _two_level_pivot pra suportar mais de 2
+    níveis (ver get_alert_type_pivot). Uma linha só ganha `children` se
+    ainda houver uma próxima coluna de nível E algum registo tiver valor
+    não-nulo nela — uma ferramenta sem categoria/métrica identificável
+    fica só com a sua própria linha, sem nível vazio a mais.
+    """
+    col, rest = level_cols[0], level_cols[1:]
+    rows = []
+    for val, group in df[df[col].notna()].groupby(col):
+        by_month = group.groupby("_month").size()
+        row = {
+            "label": val,
+            "total": int(len(group)),
+            "by_month": {m: int(by_month.get(m, 0)) for m in months},
+        }
+        if rest:
+            children = _tree_pivot(group, rest, months)
+            if children:
+                row["children"] = children
+        rows.append(row)
+    rows.sort(key=lambda r: -r["total"])
+    return rows
+
+
+def get_alert_type_pivot(df: pd.DataFrame) -> dict:
+    """
+    "Incidentes Abertos por Tipo de Alerta" — Ferramenta > Categoria >
+    Métrica (3 níveis, colapsáveis) x mês -> contagem, derivados da coluna
+    bruta "correlation_display" pelo separador "::" (ex: "ITSI::os:disk::
+    system.filesystem.used.pct" -> Ferramenta="ITSI", Categoria="os:disk",
+    Métrica="system.filesystem.used.pct"). Só corta nos 2 primeiros "::" —
+    qualquer "::" extra (ex: "ELASTIC::network:snmp:get::snmp.DATAPOWER-
+    STATUS-MIB::dpStatusCPUUsagetenMinutes.0", confirmado nos dados reais)
+    fica tudo junto no nível de Métrica, em vez de abrir um 4º nível.
+
+    Pedido pra complementar "Incidentes Abertos por Source"/"por
+    Prioridade" com mais detalhe sobre QUE alerta específico abriu o
+    incidente, não só a ferramenta de origem — a própria coluna
+    "correlation_display" (mais granular que "Source", que tem lógica
+    extra de override por região/atalhos, ver transform.add_keyword_
+    columns) é a fonte mais direta pra isto.
+
+    Incidentes sem correlation_display (vazio, nulo, ou o placeholder de
+    template por preencher — ver _CORRELATION_JUNK_MARKER) ficam de fora,
+    mesma regra de "não contar o que não tem dado" já usada em
+    get_source_by_day/_two_level_pivot (confirmado nos dados reais: ~4%
+    dos incidentes ficam de fora por isto, os restantes ~96% têm um valor
+    utilizável).
+    """
+    empty = {"months": [], "rows": [], "month_totals": {}, "grand_total": 0}
+    if "correlation_display" not in df.columns:
+        return empty
+
+    raw = df["correlation_display"].astype(str).str.strip()
+    valid = df["correlation_display"].notna() & (raw != "") & ~raw.str.contains(_CORRELATION_JUNK_MARKER, na=False, regex=False)
+    subset = df[valid & df["opened_at"].notna()].copy()
+    if subset.empty:
+        return empty
+
+    parts = subset["correlation_display"].astype(str).str.strip().str.split("::", n=2, expand=True).reindex(columns=[0, 1, 2])
+    for i, level in enumerate(["_l1", "_l2", "_l3"]):
+        subset[level] = parts[i].where(parts[i].astype(str).str.strip() != "", None)
+
+    subset["_month"] = subset["opened_at"].dt.strftime("%Y-%m")
+    months = sorted(subset["_month"].unique())
+
+    rows = _tree_pivot(subset, ["_l1", "_l2", "_l3"], months)
+    month_totals = subset.groupby("_month").size()
+    return {
+        "months": months,
+        "rows": rows,
+        "month_totals": {m: int(month_totals.get(m, 0)) for m in months},
+        "grand_total": int(len(subset)),
+    }
+
+
 def get_aioper_summary(df: pd.DataFrame) -> dict:
     """Dados só do grupo AIOPER: prioridade, ferramentas, e onde o AIOPER se encaixa no total."""
     subset = df[df["Grupo"] == "AIOPER"]

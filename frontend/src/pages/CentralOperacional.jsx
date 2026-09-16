@@ -76,14 +76,24 @@ export default function CentralOperacional() {
         </div>
       </div>
 
-      {/* Incidentes por Fonte e Dia */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
-        <h2 className="text-xl font-bold text-slate-800 dark:text-white">Incidentes por Fonte e Dia</h2>
-        <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 mb-4">
-          Quantidade de incidentes abertos por cada fonte/ferramenta, dia a dia.
-        </p>
-        {isLoading && <p className="text-slate-500 text-sm">Carregando...</p>}
-        {!isLoading && <SourceByDayTable data={summary?.source_by_day} />}
+      {/* Incidentes por Fonte e Dia / Incidentes Abertos por Tipo de Alerta */}
+      <div className="grid lg:grid-cols-2 gap-6">
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">Incidentes por Fonte e Dia</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 mb-4">
+            Quantidade de incidentes abertos por cada fonte/ferramenta, dia a dia.
+          </p>
+          {isLoading && <p className="text-slate-500 text-sm">Carregando...</p>}
+          {!isLoading && <SourceByDayTable data={summary?.source_by_day} />}
+        </div>
+        <div className="bg-white dark:bg-slate-900 rounded-2xl p-6 border border-slate-300 dark:border-slate-800">
+          <h2 className="text-xl font-bold text-slate-800 dark:text-white">Incidentes Abertos por Tipo de Alerta</h2>
+          <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 mb-4">
+            Ferramenta &gt; Categoria &gt; Métrica, a partir do "Correlation Display" de cada incidente.
+          </p>
+          {isLoading && <p className="text-slate-500 text-sm">Carregando...</p>}
+          {!isLoading && <GroupedMonthlyTable data={summary?.alert_type_matrix} level1Label="Ferramenta" />}
+        </div>
       </div>
 
       {/* Atividade Operacional: abertos vs resolvidos, por hora/dia da

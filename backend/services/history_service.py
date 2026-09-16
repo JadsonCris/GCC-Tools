@@ -301,6 +301,7 @@ def _build_summary(raw_principal: pd.DataFrame, label: dict, raw_justificacoes: 
         "source_by_day": dashboard_service.get_source_by_day(enriched),
         "priority_source_matrix": dashboard_service.get_priority_source_pivot(enriched),
         "source_priority_matrix": dashboard_service.get_source_priority_pivot(enriched),
+        "alert_type_matrix": dashboard_service.get_alert_type_pivot(enriched),
         "aioper_priority_source_matrix": dashboard_service.get_priority_source_pivot(
             enriched[enriched["Grupo"] == "AIOPER"]
         ),

@@ -2271,3 +2271,600 @@ backend tocados; regressão direta contra a `dashboard.db` real
 sem_evento_summary/ci_aioper_summary sem mudanças inesperadas, uma
 única "AIOPS" em todos os sítios já corrigidos); `npx eslint` (0 erros)
 e `npm run build` (sucesso) em todos os ficheiros frontend tocados.
+
+
+ALTERAÇÕES FS — 2026-09-16 — Otimização, upload manual, Major Incs, granularidade de gráficos, Ranking e revisão total do projeto
+================================================================================
+
+Sessão longa, muitas frentes pedidas ao longo do dia. Resumo geral, por
+ordem de pedido:
+1) Otimização de performance geral (o intervalo total do filtro de datas
+   demorava vários segundos a carregar).
+2) Upload manual de tabelas em "Base de Dados", direto pra BD (não só
+   pra downloads/ à espera do próximo ciclo).
+3) Investigação de um "Sem Evento" com dados aparentemente errados —
+   não era bug de código, era um ficheiro exportado à mão a faltar
+   colunas; adicionados botões de download com o link exato do
+   ServiceNow pra evitar o erro no futuro.
+4) Correção da lógica de "P1's Despromovidos" em Major Incs (falso
+   positivo confirmado com print screen real do ServiceNow).
+5) Granularidade Dia/Mês/Ano nos gráficos de barra/linha, sem rótulos a
+   zero, default "Mês"; "Dia" mostra sempre todos os dias do período.
+6) Exclusão de incidentes cancelados de todas as métricas onde ainda
+   apareciam.
+7) Seletor rápido de mês/ano no filtro de datas (além do slider já
+   existente).
+8) Revisão visual de todos os gráficos — legenda em grelha 2x2 nos pie
+   charts que ainda sobrepunham.
+9) 3 tabelas de "Ranking" (Abertos/Resolvidos/CI's Inseridos) na Central
+   Operacional > Atividade Operacional, portadas do protótipo original.
+10) Pedido do utilizador: "age como um técnico sénior, faz um review
+    total do projeto, encontra lacunas e melhora tudo o que for
+    necessário" — revisão completa do projeto (4 frentes em paralelo:
+    segurança backend, lógica de negócio backend, frontend, consistência
+    geral) com correções reais aplicadas e validadas.
+11) Reposição do controlo de versões: o repositório local tinha ficado
+    sem `.git` (o utilizador tinha feito download avulso dos ficheiros
+    depois de problemas com o git), mas o GitHub
+    (github.com/JadsonCris/GCC-Tools) ainda tinha o histórico real —
+    reconciliado sem perder nada de nenhum dos dois lados e enviado por
+    push.
+
+
+1. OTIMIZAÇÃO DE PERFORMANCE
+---------------------------------
+
+Pedido: "quando seleciono o range total demora uns bons segundos a
+carregar tudo, vê o que dá para melhorar e fazer a app estar mais
+rápida e eficiente."
+
+- backend/services/sla_service.py: `get_p1_task_sets()` vetorizado (era
+  linha a linha em Python puro sobre milhares de tasks).
+- backend/services/history_service.py: leitura de tabelas da BD
+  (`_read_full_table`) passou a ter cache em memória por nome de
+  tabela, invalidado automaticamente por `mtime` do ficheiro
+  `dashboard.db` — evita reler e reconverter tipos da mesma tabela
+  várias vezes dentro do mesmo pedido/pedidos seguidos sem escrita
+  entretanto. `get_sla_trend()` reescrito pra não voltar a chamar
+  `get_range_summary()` inteiro uma vez por mês do intervalo (o que
+  repetia todo o trabalho de KPIs/prioridade/ferramentas só pra tirar 4
+  números de SLA) — passou a calcular só o que o painel de tendência
+  precisa.
+- backend/services/justificacoes_service.py: `get_justified_map()`
+  vetorizado.
+- backend/services/dashboard_service.py: `get_incidents_list()` passou
+  a só converter para dict as colunas realmente usadas pelo frontend,
+  em vez do DataFrame inteiro.
+- Chamadas a `strftime`/formatação de data que corriam linha a linha em
+  vários sítios passaram a ser feitas em lote (vetorizado) sobre a
+  coluna inteira.
+
+Validado com diffs byte-a-byte do JSON devolvido antes/depois de cada
+mudança (mesmos números, sem regressão) e medição direta do tempo de
+resposta do range total — melhoria de 3x a 8x consoante o endpoint.
+
+
+2. UPLOAD MANUAL DE TABELAS EM "BASE DE DADOS"
+----------------------------------------------------
+
+Pedido: "quero arranjar uma maneira de na view de 'Base de Dados' ter
+um campo para conseguir carregar as tabelas caso o import automático
+não funcione... queria algo que fizesse o load na base de dados e não
+apenas em cache."
+
+- backend/cache.py:
+  - `importable_table_names()` / `importable_tables_with_download_urls()`:
+    lista de tabelas que a app sabe processar por upload manual, cada
+    uma já com o link de download direto do ServiceNow (reaproveita a
+    mesma configuração de URLs do ciclo automático) quando existir.
+  - `ingest_manual_upload(table_name, filename, content)`: percorre o
+    MESMO caminho de leitura/normalização/gravação do ciclo automático
+    (`_read_csv_file` + a função de gravação própria de cada tabela),
+    mas grava DIRETO na dashboard.db a partir de um ficheiro submetido
+    pelo browser — sem esperar por nenhum ciclo do scheduler nem passar
+    por downloads/.
+- backend/routers/db_admin.py (novo, além do já existente):
+  `GET /api/db/importable-tables`, `POST /api/db/tables/{table}/upload`
+  (multipart, `python-multipart`) — validação do nome da tabela
+  reutiliza a mesma whitelist já usada pelo resto do router.
+- frontend/src/pages/DatabaseViewer.jsx: novo painel "Carregar Tabela
+  Manualmente" — seletor de tabela, botão de download com o link exato
+  do ServiceNow (ver secção 3) e dropzone de ficheiro, com mensagem de
+  sucesso/erro e refresh automático da contagem de linhas da tabela
+  depois do upload.
+- frontend/src/service/dbAdminApi.js: funções novas de upload e lista
+  de tabelas importáveis.
+
+Testado visualmente com Playwright (dev server temporário): upload de
+um CSV pequeno pra "incs_calls_gcc" — mensagem de sucesso correta e a
+contagem de linhas da tabela na lista de baixo atualizou sozinha.
+
+
+3. INVESTIGAÇÃO "SEM EVENTO" — NÃO ERA BUG, ERA FICHEIRO EXPORTADO INCOMPLETO
+------------------------------------------------------------------------------------
+
+Reportado pelo utilizador com print screen: alguns incidentes apareciam
+na quebra "Sem Evento" apesar de terem "first occurrence" preenchida.
+Pushback correto do utilizador — "a coluna event first occurence vem
+sempre com os dados corretos, tanto que na BD vejo tudo bem" e "o
+último carregamento das tabelas foi realizado por mim e este dado é
+preenchido ou não antes da criação do incidente portanto quando existe
+extração é impossível vir com dados errados, no máximo pode haver
+alguma compilação errada por parte do excel" — apontou logo na direção
+certa em vez de assumir bug de código.
+
+Diagnóstico: o utilizador indicou o ficheiro (`backend/downloads/
+PRINCIPAL_URL.xls`, o último upload manual dele). Inspecionado
+diretamente byte a byte — confirmado que esse export específico vinha
+sem 2 colunas que o export "oficial" (URL configurada) tem. A lógica de
+"Sem Evento" estava correta; o problema era só naquele ficheiro
+carregado à mão, com o export errado do ServiceNow (sysparm_fields
+diferente do esperado).
+
+Ação (pedida a seguir, secção 4 do próprio pedido): adicionar os
+botões de download com o link EXATO configurado no `.env` (mesmo usado
+pelo fetch automático) ao painel de upload manual — ver secção 2 acima
+— pra qualquer export manual futuro vir sempre com as colunas certas.
+
+
+4. MAJOR INCS — "P1's DESPROMOVIDOS" CORRIGIDO
+----------------------------------------------------
+
+Reportado pelo utilizador com print screen real de Task SLA do
+ServiceNow: INC0055713 passou por P3+P4→P1→P2→Nível2→Nível1 mas
+terminou como P1 — a lógica antiga (reconstruir a cronologia de
+prioridade a partir do export `task_sla_list.do`, que o ServiceNow por
+vezes purga tasks antigas) marcava-o incorretamente como "despromovido"
+(falso positivo).
+
+Objetivo confirmado com o utilizador: "usar a query dos despromovidos
+para assinalar os incs que são efetivamente despromovidos de P1 para
+P2 ou outra prioridade, podes manter os P1s reais com a tabela dos sla3
+sem problema — era apenas para confirmar a lógica que tínhamos."
+
+- backend/cache.py: `_build_despromovidos_url()` reescrito para usar
+  `task.numberIN<...>` (todos os números de P1 conhecidos,
+  `_all_known_p1_numbers()`) — a query de despromovidos passou a vir
+  COMPLETA, sem depender da purga de tasks do ServiceNow.
+- backend/services/history_service.py: `get_major_incs_summary()`
+  passou a usar `sla3_incidentes._status` (via `_read_status_map()`,
+  active/backlog — o mesmo sinal já fiável usado noutras partes da app)
+  como a população real de P1s, em vez da reconstrução de cronologia.
+- backend/services/major_incs_service.py: `get_despromovidos_detail()`
+  passou a receber `sla3_status_by_number` + o despromovidos bruto
+  (agora completo) e só ANOTAR, por task, qual foi a última prioridade
+  vista (`despromovido_para`: "P2"/"P3"/"P4") — sem decidir sozinho
+  quem é ou não um P1 real.
+- `_all_days_between()`/`_daily_counts()` dos painéis diários de Major
+  Incs passaram a preencher SEMPRE todos os dias do intervalo (não só
+  os dias com dados), consistente com o pedido da secção 6 (granularidade).
+- backend/services/audit_service.py: docstrings atualizadas a
+  documentar que a lógica de cronologia deixou de ser a fonte de
+  verdade (mais tarde, na revisão geral da secção 10, este ficheiro
+  acabou por ser apagado de vez — código morto, sem nenhuma referência
+  no resto do projeto).
+
+Validado com o print screen real do utilizador: INC0055713 deixou de
+aparecer como despromovido; o total de P1s reais (via sla3_incidentes)
+manteve-se inalterado.
+
+
+5. GRANULARIDADE DIA/MÊS/ANO NOS GRÁFICOS + RÓTULOS A ZERO
+------------------------------------------------------------------
+
+Dois pedidos relacionados, com imagem de referência em cada um:
+- "se estiver a 0 não precisa de estar ali a ser relevante, quero o dia
+  mas não o dado a dizer 0... e coloca o default para ser o 'mês'"
+  (Total de Tempo em Call, gráfico de linha).
+- "nos gráficos que tenham barras ou assim quero a possibilidade de ver
+  ou por ano ou por mês ou por dia, e quando mostrar dia mostra todos
+  os dias e não apenas onde tem dados" (Total de Calls, gráfico de
+  barra).
+
+- frontend/src/utils/trendGranularity.js (novo): `aggregateByGranularity
+  (data, granularity, sumKeys, dateKey)` — agrupa uma série diária em
+  dia/mês/ano, somando as chaves indicadas; usado por todos os painéis
+  diários de Major Incs.
+- frontend/src/components/Filters/GranularityToggle.jsx (novo):
+  toggle Dia/Mês/Ano reutilizável.
+- frontend/src/pages/MajorIncs.jsx: os 3 painéis diários (Calls,
+  Despromovidos, Tempo em Call) ligados ao `GranularityToggle` +
+  `aggregateByGranularity`; default mudado para "mês" nos 3.
+- frontend/src/components/Charts/LineValueLabels.jsx: rótulo de valor
+  suprimido quando o valor é 0 (mesma ideia já aplicada a
+  BarValueLabels.jsx numa sessão anterior, que já suprimia zeros e não
+  precisou de mudança).
+- backend: `_all_days_between()`/`_daily_counts()` (major_incs_service.py,
+  ver secção 4) já garantem que a série diária tem TODOS os dias do
+  intervalo preenchidos (com 0 onde não há dados) antes de chegar ao
+  frontend — a granularidade "Dia" mostra sempre o calendário completo.
+
+Confirmado pelo utilizador ("isso mesmo") depois de ver o resultado.
+
+
+6. EXCLUSÃO DE INCIDENTES CANCELADOS DE TODAS AS MÉTRICAS
+------------------------------------------------------------------
+
+Pedido: "retira os incidentes cancelados de todas as métricas onde eles
+aparecerem" (motivado por um "Sem Evento" a aparecer sem dados de
+canal/geo/descrição — rasto de um incidente cancelado misturado nos
+cálculos).
+
+- backend/services/transform.py: `exclude_canceled_incidents(df,
+  column="State")` (já existia, usada nalguns sítios) passou a ser
+  aplicada em TODOS os pontos que ainda não a tinham:
+  `get_enriched_gcc_abertos()`/`get_enriched_gcc_abertos_range()` e
+  `get_major_incs_summary()`'s `raw_incs_calls_gcc` (junto com
+  `exclude_hidden_technicians`, que também estava em falta ali).
+- Confirmado que os pontos "centrais" (get_monthly_summary,
+  get_range_summary) já aplicavam este filtro de sessões anteriores —
+  o trabalho desta ronda foi fechar os pontos secundários que ainda
+  liam a tabela bruta sem passar por ele.
+
+
+7. FILTRO DE DATAS — SELETOR RÁPIDO DE MÊS/ANO
+----------------------------------------------------
+
+Pedido, com imagem anotada à mão (marcas MAI/JUN/JUL/AGO/SET e 2026 no
+slider): "eu gosto do nosso controlo de calendário e assim mas queria
+uma maneira mais friendly... uma maneira de escolher logo os meses ou o
+ano."
+
+- frontend/src/components/Filters/DateRangeFilter.jsx: marcas
+  clicáveis de mês/ano no próprio slider (prop `marks` do MUI Slider),
+  cada uma um botão que seleciona o mês/ano inteiro de um clique.
+  - Bug de acessibilidade encontrado e corrigido durante a
+    implementação: o MUI Slider marca `aria-hidden="true"` nos labels
+    das marcas por omissão — os novos botões ficavam invisíveis a
+    leitores de ecrã (e ao Playwright usado pra validar). Corrigido com
+    `slotProps={{ markLabel: { "aria-hidden": false } }}` (confirmado
+    lendo o código-fonte do `Slider.js` do MUI: o spread de
+    `slotProps.markLabel` acontece DEPOIS do `aria-hidden` default,
+    dá pra sobrepor).
+
+Confirmado pelo utilizador ("isso mesmo") depois de ver o resultado.
+
+
+8. REVISÃO VISUAL DE TODOS OS GRÁFICOS — LEGENDA EM GRELHA 2X2
+------------------------------------------------------------------------
+
+Pedido: "reve todos os gráficos... não quero coisas feias, nada
+sobreposto ou assim, tentar sempre ficar tudo ajustado."
+
+- Primeira tentativa (insuficiente): manter a legenda embutida do MUI X
+  e só aumentar a margem inferior conforme o nº de categorias — o
+  utilizador confirmou que "continua a sobrepor" numa fatia muito
+  grande (75% do círculo), cujo rótulo de percentagem fica perto da
+  borda do anel e invade o espaço reservado à legenda, independente da
+  margem.
+- Solução definitiva: frontend/src/components/Charts/SimplePieChart.jsx
+  reescrito — legenda embutida do MUI X desligada de vez
+  (`slotProps={{ legend: { hidden: true } }}`) e substituída por uma
+  legenda própria em HTML/CSS, `grid grid-cols-2` por baixo do SVG —
+  estruturalmente nunca mais pode competir por espaço vertical com o
+  gráfico, seja qual for o tamanho das fatias.
+- Verificado com Playwright em modo "verdade do DOM"
+  (`getBoundingClientRect()` + interseção de retângulos calculada
+  programaticamente, não inspeção visual de screenshot — que já tinha
+  dado falsos positivos por artefactos de compressão/redimensionamento
+  em rondas anteriores) para 1/2/3/4 categorias: 0 sobreposições em
+  todos os casos.
+- Falso alarme identificado e corrigido durante a mesma revisão: um
+  screenshot do gráfico "Total de Tempo em Call" pareceu mostrar o
+  eixo Y na ordem errada (0 no topo) — reverificado com a mesma técnica
+  de `getBoundingClientRect()` sobre os ticks reais do eixo e confirmado
+  que a ordem estava correta; comunicado ao utilizador como má leitura
+  minha da imagem, não um bug real.
+
+
+9. CENTRAL OPERACIONAL — TABELAS DE "RANKING"
+----------------------------------------------------
+
+Pedido, com 3 screenshots do protótipo original: "reparei agora que na
+sessão anterior não foram colocadas estas tabelas na view 'Central
+Operacional' na parte da Atividade Operacional" (Ranking Abertos /
+Resolvidos / CI's Inseridos, por técnico).
+
+- backend/services/team_service.py: `username_by_tecnico()` (novo) —
+  lookup inverso de `username_to_tecnico()` já existente, pra a tabela
+  poder mostrar/ordenar também pelo username curto do ServiceNow.
+- backend/services/operational_activity_service.py: cada linha
+  individual da Atividade Operacional passou a incluir `username`
+  (via `username_by_tecnico`).
+- frontend/src/components/CentralOperacional/RankingTable.jsx (novo):
+  componente de tabela ordenável genérico, reutilizado nos 3 rankings.
+- frontend/src/components/Sections/OperationalActivitySection.jsx: os
+  3 `RankingTable` (Abertos/Resolvidos/CI's Inseridos) adicionados
+  dentro do separador "Visão Global" já existente, usando o filtro de
+  datas já existente na página — as duas decisões de âmbito confirmadas
+  com o utilizador antes de implementar.
+
+Validado numericamente contra os screenshots de referência do
+utilizador (mesma ordenação/topo de ranking).
+
+
+10. REVISÃO TOTAL DO PROJETO ("AGE COMO UM TÉCNICO SÉNIOR")
+--------------------------------------------------------------------
+
+Pedido: "agora age como um técnico sénior, faz um review total do
+projeto, encontra lacunas e melhora tudo o que for necessário" — sem
+mais nenhuma indicação de âmbito.
+
+Como o projeto não tinha `.git` nesse momento, a skill de code-review
+(que exige um diff) não se aplicava a um pedido de "revê tudo". Em vez
+disso, lancei 4 agentes em paralelo, cada um focado numa frente
+diferente (segurança do backend, lógica de negócio do backend,
+frontend, consistência geral do projeto), e apliquei/validei as
+correções reais encontradas:
+
+a) SEGURANÇA
+- backend/routers/ponto_situacao.py: os 2 endpoints que fazem
+  DROP/CREATE/INSERT em bruto nas tabelas de referência (`/tabelas/
+  {tabela}/importar`, `/tabelas/{tabela}` DELETE) não tinham NENHUMA
+  proteção, ao contrário do que o docstring de auth_service.py
+  garantia ("só turnos/db_admin/team têm escrita"). Protegidos com
+  `dependencies=[Depends(auth_service.require_admin)]` — só estes
+  dois, o resto do router (status/grupos/aplicações, gerar e-mail)
+  continua aberto ao uso normal do dia a dia. Testado: admin passa,
+  não-admin recebe 403, endpoints de leitura não afetados.
+- backend/services/reports_email_service.py: os e-mails HTML
+  (P1 Semanal, CAB, reports genéricos) interpolavam valores vindos de
+  dados do ServiceNow/uploads diretamente no HTML, sem escape — um
+  campo de texto livre com `<script>`/`<img onerror=...>` seria
+  executado no cliente de e-mail de quem recebesse. Corrigido com um
+  helper `_esc()` (`html.escape`) aplicado em todos os pontos de
+  interpolação. Testado diretamente com payloads `<script>`, `<b>`,
+  `<img onerror=...>` — todos corretamente escapados.
+- backend/routers/db_admin.py: `upload_table` lia o ficheiro inteiro
+  pra memória sem limite de tamanho nenhum — `MAX_UPLOAD_BYTES` (50MB)
+  adicionado, com verificação prévia por `Content-Length` e verificação
+  do tamanho real depois de ler. Testado: upload normal continua 200,
+  ficheiro de 51MB corretamente rejeitado com 413.
+- backend/routers/dashboard.py, major_incs.py, operators.py: os
+  parâmetros `start`/`end` (usados em 7 endpoints) eram `str` livres —
+  uma data malformada só rebentava dentro de `pd.Timestamp()`, com 500
+  e stack trace em vez de um erro limpo. Trocados para o tipo `date` do
+  FastAPI/Pydantic (`date | None` onde é opcional) — validação e
+  mensagem de erro passam a ser automáticas, ANTES de tocar em
+  qualquer lógica; convertidos com `.isoformat()` ao chamar os serviços
+  por baixo. Testado: datas inválidas devolvem 422 estruturado; todos
+  os endpoints continuam 200 com datas reais.
+- Consistência de tratamento de erros: adicionado try/except (padrão já
+  usado no resto da app — `except Exception: raise HTTPException(500,
+  ...)`) aos endpoints que ainda não tinham em ponto_situacao.py
+  (status/grupos/aplicações/equipa/tl), turnos.py (patch/delete
+  employee, get_shifts, clear-month) e auth.py (/me).
+
+b) LÓGICA DE NEGÓCIO
+- backend/services/history_service.py: nova
+  `_exclude_hidden_technician_tasks(raw_sla4)` — o SLA4 (tasks P1→outra
+  prioridade) ainda não excluía tasks de incidentes abertos por
+  técnicos ocultos, ao contrário do resto da app. Aplicada nos 3 sítios
+  que leem SLA4 (`get_monthly_summary`, `get_range_summary`,
+  `get_sla_trend`), sempre antes do filtro de região já existente.
+  Testado com dados reais: exatamente 3 linhas excluídas (INC0010407,
+  INC0013821, INC0059477), sem alterar o `sla4_not_achieved` atual
+  (nenhuma delas é P1 ainda).
+- Ver também secção 6 (exclusão de cancelados em
+  get_enriched_gcc_abertos/_range e get_major_incs_summary).
+- backend/services/audit_service.py e backend/services/
+  backlog_service.py: apagados — código morto (zero referências em
+  todo o projeto, confirmado por grep antes de apagar), funcionalidades
+  já descontinuadas em sessões anteriores.
+
+c) FRONTEND
+- frontend/src/pages/AdvancedSla.jsx: os cards de Backlog e
+  Despromovidos (endpoints já descontinuados) não tratavam erro —
+  uma falha silenciava para "0"/"—" em vez de avisar que o dado está
+  indisponível. Adicionado `isError` a ambas as queries, com estado
+  "Indisponível" explícito nos cards e nota a redirecionar para a
+  página "Major Incs" (onde os dados reais agora vivem).
+- frontend/src/components/Turnos/EscalaTab.jsx:
+  - Bug real de perda de dados: `handleClearMonth` limpava o mês no
+    servidor mas não atualizava o `draft` local (o que a grelha mostra
+    E o que o botão "Guardar" reenvia) — a próxima gravação
+    ressuscitava todos os turnos "apagados". Corrigido a limpar também
+    o `draft` local antes de notificar o resto da página.
+  - `handleAddEmployee`/`handleToggleHide`/`handleShowAll`/
+    `handleDelete` passaram a ter try/catch com aviso ao utilizador em
+    caso de falha (antes falhavam silenciosamente).
+- frontend/src/components/PontoSituacao/EmailRequestForm.jsx: o
+  auto-preenchimento (debounce de 400ms) mostrava sempre "Servidor
+  offline" em qualquer erro, mesmo quando o backend respondia com uma
+  mensagem de validação real — corrigido a mostrar a mensagem real do
+  backend quando existir.
+- frontend/src/pages/Turnos.jsx: `isError` adicionado às 2 queries
+  principais (employees/shifts) — antes uma falha caía nos defaults
+  (`[]`/`{}`) e mostrava uma escala "vazia mas válida" (0 colaboradores,
+  todos os dias sem cobertura) em vez de avisar que os dados não
+  carregaram.
+- frontend/src/components/PontoSituacao/ReferenceDataPanel.jsx:
+  `isError` adicionado ao estado das tabelas de referência — antes uma
+  falha a buscar o estado mostrava "0 linhas... base ainda não
+  atualizada" em todas as tabelas, indistinguível de "nunca se importou
+  nada".
+- frontend/src/pages/CAB.jsx: `handleAdicionarChangesSelecionados`
+  deduplicava só contra a lista de changes manuais, não contra a lista
+  já cruzada automaticamente — um change selecionado à mão que já
+  estava auto-cruzado entrava duplicado no e-mail final do CAB.
+  Corrigido a deduplicar contra as duas listas.
+
+d) CONSISTÊNCIA GERAL DO PROJETO
+- backend/.env.example: documentadas `SN_FILENAME_JUSTIFICACOES` e
+  `SN_FILENAME_CALLS` (já lidas por cache.py, mas nunca listadas aqui).
+- backend/requirements.txt: `numpy` adicionado explicitamente (já
+  usado por toda a app através do pandas, mas nunca pinado — deixava
+  de aparecer se o pandas alguma vez deixasse de o exigir como
+  dependência direta).
+- backend/services/auth_service.py: docstring do módulo corrigida —já
+  não é verdade que só turnos/db_admin/team têm escrita (ver secção
+  10a, ponto_situacao.py).
+
+Itens encontrados mas NÃO corrigidos nesta ronda (documentados, impacto
+baixo ou risco/esforço do refactor não compensou agora):
+- `ci_service.py`: coluna `is_aiops_self` calculada mas nunca
+  consumida por nenhum lado.
+- `_read_full_table`: janela teórica (estreita) de leitura de um
+  snapshot "a meio" de uma escrita concorrente à dashboard.db.
+- `get_available_months()`/`get_date_bounds()`: não excluem
+  cancelados/técnicos ocultos (cosmético — só define os limites do
+  slider, não entra em nenhum cálculo).
+- `getReportsExportConfig`: falta `isError` em 5 páginas de Reports
+  (CAB, ReportPt, Reports1, SplunkValidacao, PontoSituacaoEquipa) — o
+  fallback já funciona, só não avisa explicitamente se falhar.
+
+Todas as correções desta secção foram testadas contra o backend real
+(`--reload` ligado, `curl` a cada endpoint tocado) antes e depois de
+cada mudança, sem nenhuma regressão nos endpoints que não deviam mudar.
+
+
+11. REPOSIÇÃO DO CONTROLO DE VERSÕES (GIT)
+------------------------------------------------
+
+Ao fechar a revisão da secção 10, o facto de o projeto não ter `.git`
+nem testes automatizados foi sinalizado ao utilizador como uma lacuna
+de projeto (não só de código) — perguntei se queria que inicializasse
+o git. Resposta: "eu fiz download do nosso repositório do git pois
+estava com problemas mas o projeto deveria estar ligado a
+https://github.com/JadsonCris/GCC-Tools, se conseguires fazer um push
+para lá melhor."
+
+Investigação antes de mexer em nada: `git ls-remote` + um clone à parte
+(fora da pasta do projeto, só pra inspecionar) confirmaram que o
+GitHub AINDA tinha o histórico real (8 commits, o último "Adicionar
+Ponto de Situacao, Splunk Validacao e ajustes no CAB") — ou seja, a
+pasta local (sem `.git`) e o histórico do GitHub tinham divergido sem
+nenhuma relação entre si, e um `git checkout` normal teria sobrescrito
+todo o trabalho local acumulado (todas as secções 1-10 desta entrada, e
+sessões anteriores) com a versão antiga do GitHub. Reconciliado sem
+apagar nada dos dois lados:
+1. `git init -b main` + `git remote add origin` + `git fetch origin`.
+2. `git update-ref refs/heads/main origin/main` — aponta o branch local
+   pro topo do histórico do GitHub SEM tocar em nenhum ficheiro local
+   (ao contrário de um `git checkout`, que teria sobrescrito).
+3. `git status` a partir daí mostrou a diferença real entre o histórico
+   do GitHub e o estado atual da pasta: 27 ficheiros novos, 41
+   modificados, 2 removidos (audit_service.py/backlog_service.py, ver
+   secção 10b) — exatamente o trabalho acumulado, nada mais.
+4. Encontrado de caminho: o repositório do GitHub tinha a pasta
+   `venv/` inteira versionada (~194MB, 5258 ficheiros — 100%
+   reproduzível via `pip install -r backend/requirements.txt`).
+   Perguntado ao utilizador se queria manter essa convenção ou
+   descartar — escolheu descartar. `.gitignore` atualizado
+   (`venv/` adicionado).
+5. Um commit único a consolidar o trabalho acumulado (mensagem
+   detalhada a listar as secções 1-10 desta entrada) e
+   `git push origin main` — fast-forward normal, SEM `--force`, sem
+   reescrever nem apagar nenhum commit existente no GitHub.
+
+Confirmado: `git ls-remote` no GitHub e `git rev-parse HEAD` local
+devolvem o mesmo commit depois do push; `git status` local limpo; nenhum
+segredo (`.env`, `dashboard.db`, `downloads/`) entrou no commit
+(confirmado por grep no diff staged antes de commitar).
+
+
+12. LIMITAÇÕES DESTA SESSÃO
+--------------------------------
+- O projeto continua sem testes automatizados — toda a validação desta
+  sessão foi manual (curl/TestClient/Playwright/eslint/build), não há
+  suite nenhuma que corra sozinha em CI.
+- Itens de baixa prioridade da secção 10d ficaram só documentados, não
+  corrigidos — ver lista acima.
+- A partir de agora o projeto TEM histórico de git outra vez
+  (github.com/JadsonCris/GCC-Tools, branch `main`) — sessões futuras já
+  podem (e devem) usar commits normais em vez de trabalho acumulado em
+  disco sem controlo de versões.
+
+
+ALTERAÇÕES FS — 2026-09-16 (continuação, mesmo dia) — NOVA TABELA "INCIDENTES ABERTOS POR TIPO DE ALERTA"
+================================================================================================================
+
+Pedido, com imagem anotada (área vazia à direita de "Incidentes por
+Fonte e Dia" em Central Operacional): uma tabela "parecida com a de
+cima" (Incidentes Abertos por Source), mas em vez do sub-nível ser a
+Prioridade, dividir por "tipos de alerta" a partir da coluna bruta
+"Correlation display" — exemplo dado: "ITSI::os:disk::system.
+filesystem.used.pct" é um alerta de ITSI, categoria "os:disk", métrica
+"system.filesystem.used.pct". Pedido explícito pra funcionar pra TODOS
+os alertas (não só o exemplo) e excluir os incidentes sem esse dado,
+mesma regra já usada na tabela de Source. Prioridade dada foi
+"funcionar bem" sobre "bonito" — polimento visual fica pra depois.
+
+Investigação prévia (direto na dashboard.db real, antes de escrever
+código): a coluna vem de "gcc_abertos"/"Correlation display", renomeada
+pra "correlation_display" (minúsculo) na fase de enrich (ver
+transform._rename_raw_columns). Da amostra real (9968 valores não-nulos
+de 10428 linhas): 9816 têm exatamente 3 segmentos por "::", 135 são
+literalmente o placeholder de template do ServiceNow por preencher
+("$c_snow_correlation_display|u$", NÃO um valor real) e 17 têm 4
+segmentos (um "::" extra dentro do próprio nome da métrica, ex:
+"ELASTIC::network:snmp:get::snmp.DATAPOWER-STATUS-MIB::dpStatus...").
+Cardinalidade real confirmada baixa e perfeitamente tratável numa
+tabela: só 14 valores distintos de Ferramenta, 76 pares (Ferramenta,
+Categoria) distintos, no máximo 16 Métricas distintas dentro de um
+mesmo (Ferramenta, Categoria).
+
+1. BACKEND
+--------------
+- backend/services/dashboard_service.py:
+  - `_tree_pivot(df, level_cols, months)` (novo): generalização
+    recursiva de `_two_level_pivot` pra um número arbitrário de níveis —
+    uma linha só ganha `children` se ainda houver uma próxima coluna de
+    nível E algum registo tiver valor não-nulo nela (uma ferramenta sem
+    categoria/métrica fica só com a sua própria linha, sem nível vazio).
+  - `get_alert_type_pivot(df)` (novo): usa `_tree_pivot` com 3 níveis
+    (Ferramenta/Categoria/Métrica), calculados de
+    `correlation_display.str.split("::", n=2)` — só corta nos 2
+    primeiros "::", qualquer "::" extra fica tudo junto no nível de
+    Métrica (cobre os 17 casos de 4 segmentos sem abrir um 4º nível).
+    Exclui linhas sem `correlation_display` (vazio/nulo) e o placeholder
+    de template do ServiceNow (`_CORRELATION_JUNK_MARKER =
+    "c_snow_correlation_display"`) — mesma regra de "não contar o que
+    não tem dado" já usada em `get_source_by_day`/`_two_level_pivot`.
+- backend/services/history_service.py: `_build_summary()` (núcleo
+  comum a get_monthly_summary/get_range_summary) ganhou o campo
+  `alert_type_matrix` no resultado.
+
+Validado direto contra a dashboard.db real (fora do HTTP, chamando o
+serviço a sério): `ITSI > os:disk > system.filesystem.used.pct` = 1465
+incidentes (bate exatamente com o exemplo dado no pedido); soma dos
+totais de nível 1 == grand_total; soma de month_totals == grand_total;
+14 linhas de nível 1, maior nº de filhos por ferramenta = 26 (OEM), maior
+nº de métricas por (ferramenta, categoria) = 16 (SCOM > AvailabilityHealth).
+Repetido via `/api/dashboard/range` real (backend `--reload` já a
+correr) — campo `alert_type_matrix` presente e coerente na resposta.
+
+2. FRONTEND
+---------------
+- frontend/src/components/Tables/GroupedMonthlyTable.jsx: generalizado
+  de 2 níveis fixos (linha-mãe + filhos) pra profundidade arbitrária —
+  renderização agora recursiva (`<Row depth={...}>`), com uma cor/
+  indentação mais "leve" por nível (`ROW_STYLES`, reaproveita até ao
+  último estilo se a árvore for mais funda que os estilos definidos).
+  Estado de expandido/colapsado passou a ser indexado por CAMINHO
+  completo (`Ferramenta>Categoria`), não só pela label — duas linhas em
+  ramos diferentes podem ter o mesmo nome (ex: "Status" como categoria
+  de várias ferramentas) sem colidirem no mesmo estado. "Expandir tudo"/
+  "Colapsar tudo" continuam a funcionar em todos os níveis de uma vez.
+  As 2 tabelas já existentes (Prioridade/Source, só 2 níveis) continuam
+  com o mesmo comportamento visual de sempre — a generalização é
+  retrocompatível (uma linha sem netos simplesmente não mostra o 3º
+  nível).
+- frontend/src/pages/CentralOperacional.jsx: bloco "Incidentes por
+  Fonte e Dia" (que era uma única secção a toda a largura) passou a ser
+  uma grelha de 2 colunas — a nova tabela "Incidentes Abertos por Tipo
+  de Alerta" (`GroupedMonthlyTable` com `data={summary?.alert_type_
+  matrix}` e `level1Label="Ferramenta"`) entra ao lado, exatamente na
+  área assinalada na imagem do pedido.
+
+3. VALIDAÇÃO VISUAL
+------------------------
+Testado com Playwright (dev server temporário, mesmo padrão já usado
+nesta sessão — instalado com `--no-save`, removido no fim com um `npm
+install` limpo): tabela renderiza com os 14 grupos de Ferramenta, "+"/
+"Expandir tudo"/"Colapsar tudo" funcionam nos 3 níveis, o caminho ITSI >
+os:disk > system.filesystem.used.pct aparece com os números certos, e
+uma verificação de sobreposição por `getBoundingClientRect()` (mesma
+técnica "verdade do DOM" já usada nesta sessão pros pie charts) confirmou
+0 pares de células sobrepostas. `npx eslint` (0 erros) e `npm run build`
+(sucesso) nos ficheiros tocados.
